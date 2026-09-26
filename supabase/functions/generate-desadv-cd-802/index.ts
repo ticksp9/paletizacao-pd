@@ -192,6 +192,7 @@ interface WarehouseAddress {
 
 interface DLEntry {
   storeCode: string;
+  lgCode: string;
   asnNumber: string;
   asnItemNum: string;
   socCode: string;
@@ -256,7 +257,16 @@ async function loadInternalCodeMap(
   return map;
 }
 
-function validateBuiltRecords(records: string[][], transportGuide: string): string[] {
+function lgNumber(value: string | null | undefined): number {
+  const n = parseInt(String(value ?? "").replace(/\D/g, ""), 10);
+  return Number.isFinite(n) ? n : -1;
+}
+
+function validateBuiltRecords(
+  records: string[][],
+  transportGuide: string,
+  dlLgOrder: Map<string[], number>,
+): string[] {
   const errors: string[] = [];
   const expected: Record<string, number> = { CG: 32, DG: 29, DL: 12, RG: 6 };
 
@@ -321,19 +331,18 @@ function validateBuiltRecords(records: string[][], transportGuide: string): stri
     }
   }
 
-  // Ordem global: DG ascendente por número de linha; DL numérico por asn_item_num dentro de cada DG
+  // Ordem global: DG ascendente por número de linha; DL por LG decrescente dentro de cada DG
   let lastDG = -Infinity;
-  let lastDL = -Infinity;
+  let lastDL = Infinity;
   for (const fields of records) {
     if (fields[0] === "DG") {
       const n = Number(fields[3]);
       if (n <= lastDG) errors.push(`DG fora de ordem: linha ${fields[3]} após ${lastDG}`);
       lastDG = n;
-      lastDL = -Infinity;
+      lastDL = Infinity;
     } else if (fields[0] === "DL") {
-      const n = parseInt(String(fields[6]).replace(/\D/g, ""), 10);
-      const v = Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
-      if (v < lastDL) errors.push(`DL fora de ordem: asn_item_num ${fields[6]} após ${lastDL}`);
+      const v = dlLgOrder.get(fields) ?? -1;
+      if (v > lastDL) errors.push(`DL fora de ordem: LG ${v} após LG ${lastDL} (loja ${fields[2]})`);
       lastDL = v;
     }
   }
@@ -733,6 +742,7 @@ Deno.serve(async (req) => {
       if (orderLine.line_number && orderLine.line_number < dg.lineNumber) dg.lineNumber = orderLine.line_number;
 
       const storeCode = String(orderLine.store_code || "").trim();
+      const lgCode = String(orderLine.lg_code || "").trim();
       const asnNumber = String(orderLine.asn_number || "").trim();
       const asnItemNum = String(orderLine.asn_item_num || "").trim();
       const socCodes = [...(lineSocMap.get(orderLine.id) || new Set<string>())].filter(Boolean).sort();
@@ -755,6 +765,7 @@ Deno.serve(async (req) => {
         const qtyForSoc = socCodes.length === 1 ? lineQty : lineQty * (boxes / totalMappedBoxes);
         dg.dlEntries.push({
           storeCode,
+          lgCode,
           asnNumber,
           asnItemNum,
           socCode: soc,
@@ -778,13 +789,15 @@ Deno.serve(async (req) => {
           agg.set(key, { ...dl });
         }
       }
+      // Ordem das DL exigida pelo Pingo Doce: LG do maior para o menor (sequência do layout do armazém);
+      // empate: loja decrescente, depois SOC crescente.
       dg.dlEntries = [...agg.values()].sort((a, b) => {
-        const na = parseInt(String(a.asnItemNum).replace(/\D/g, ""), 10);
-        const nb = parseInt(String(b.asnItemNum).replace(/\D/g, ""), 10);
-        const va = Number.isFinite(na) ? na : Number.MAX_SAFE_INTEGER;
-        const vb = Number.isFinite(nb) ? nb : Number.MAX_SAFE_INTEGER;
-        if (va !== vb) return va - vb;
-        if (a.storeCode !== b.storeCode) return a.storeCode.localeCompare(b.storeCode, "pt", { numeric: true });
+        const la = lgNumber(a.lgCode);
+        const lb = lgNumber(b.lgCode);
+        if (la !== lb) return lb - la;
+        const sa = parseInt(a.storeCode, 10) || 0;
+        const sb = parseInt(b.storeCode, 10) || 0;
+        if (sa !== sb) return sb - sa;
         return a.socCode.localeCompare(b.socCode, "pt", { numeric: true });
       });
     }
@@ -802,6 +815,7 @@ Deno.serve(async (req) => {
     }
 
     const records: string[][] = [];
+    const dlLgOrder = new Map<string[], number>();
     currentStep = "build_cg";
     console.log("DESADV step:", currentStep);
     const deliveryDatetime = getDeliveryDatetime(order as Record<string, unknown>);
@@ -890,6 +904,7 @@ Deno.serve(async (req) => {
         dlFields[9] = dl.asnNumber;
         dlFields[10] = dl.socCode;
         dlFields[11] = String(dl.palletItemCount);
+        dlLgOrder.set(dlFields, lgNumber(dl.lgCode));
         records.push(dlFields);
       }
     }
@@ -900,7 +915,7 @@ Deno.serve(async (req) => {
     rg[1] = String(countDG);
     records.push(rg);
 
-    const validationErrors = validateBuiltRecords(records, transportGuide);
+    const validationErrors = validateBuiltRecords(records, transportGuide, dlLgOrder);
     if (validationErrors.length > 0) {
       return new Response(JSON.stringify({
         success: false,
