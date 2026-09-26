@@ -1,0 +1,7 @@
+
+ALTER TABLE public.order_lines
+  ADD COLUMN IF NOT EXISTS store_code TEXT,
+  ADD COLUMN IF NOT EXISTS warehouse_code TEXT,
+  ADD COLUMN IF NOT EXISTS quantity_cases NUMERIC,
+  ADD COLUMN IF NOT EXISTS asn_number TEXT,
+  ADD COLUMN IF NOT EXISTS asn_item_num TEXT;

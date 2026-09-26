@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.local
+.env.*.local
+# Dados de produção e ficheiros gerados: ficam só no PC
+/backups/
+/exports/
+/supabase/.temp/
+.DS_Store
+Thumbs.db

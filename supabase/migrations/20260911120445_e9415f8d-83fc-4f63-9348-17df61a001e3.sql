@@ -1,0 +1,1 @@
+ALTER TABLE public.pallet_items ADD COLUMN IF NOT EXISTS orientation text;

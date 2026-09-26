@@ -1,0 +1,1 @@
+ALTER TABLE public.pd_lg_locations ADD COLUMN IF NOT EXISTS notes text;

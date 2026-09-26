@@ -1,0 +1,9 @@
+# Paletização & EDI
+
+> Aplicação interna para processamento de ficheiros EDI, paletização de encomendas e geração de etiquetas e DESADV para logística cerâmica.
+
+Acesso restrito a operadores autenticados. Não existe conteúdo público para indexação.
+
+## Pages
+
+- [Login](/login): Autenticação de operadores e administradores.

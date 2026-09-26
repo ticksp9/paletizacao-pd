@@ -1,0 +1,49 @@
+project_id = "fzrzzwdvysrrzpmrezbj"
+
+[functions.parse-edi]
+verify_jwt = false
+
+[functions.build-pallet-plan]
+verify_jwt = false
+
+[functions.generate-labels-pdf]
+verify_jwt = false
+
+[functions.import-masterdata-items]
+verify_jwt = false
+
+[functions.generate-labels-zpl]
+verify_jwt = false
+
+[functions.import-lg-locations]
+verify_jwt = false
+
+[functions.delete-order]
+verify_jwt = false
+
+[functions.admin-reset]
+verify_jwt = false
+
+[functions.import-delivery-sites]
+verify_jwt = false
+
+[functions.generate-desadv-cd-802]
+verify_jwt = false
+
+[functions.release-plan-reservation]
+verify_jwt = false
+
+[functions.generate-picking-sheet]
+verify_jwt = false
+
+[functions.generate-pallet-build-pdf]
+verify_jwt = false
+
+[functions.import-pd-article-codes]
+verify_jwt = false
+
+[functions.manage-users]
+verify_jwt = false
+
+[functions.self-set-password]
+verify_jwt = false
