@@ -8,6 +8,7 @@ import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { ErrorBoundary } from "@/components/error-boundary";
 
 import LoginPage from "./pages/LoginPage";
+import DashboardPage from "./pages/DashboardPage";
 import ImportEDIPage from "./pages/ImportEDIPage";
 import OrdersPage from "./pages/OrdersPage";
 import PalletizationPage from "./pages/PalletizationPage";
@@ -35,7 +36,7 @@ const AppRoutes = () => {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route element={<ProtectedRoute />}>
-          <Route path="/" element={<Navigate to="/import" replace />} />
+          <Route path="/" element={<DashboardPage />} />
           <Route path="/import" element={<ImportEDIPage />} />
           <Route path="/orders" element={<OrdersPage />} />
           <Route path="/orders/:orderId" element={<PalletizationPage />} />

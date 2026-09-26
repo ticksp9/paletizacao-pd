@@ -23,11 +23,11 @@ type LoginError = Error & {
 
 const routeForRole = (role: string | null): string => {
   switch (role) {
-    case 'admin': return '/admin';
+    case 'admin': return '/';
     case 'etiquetas': return '/labels';
     case 'pendente': return '/';
     case 'operador':
-    default: return '/import';
+    default: return '/';
   }
 };
 

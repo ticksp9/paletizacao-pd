@@ -11,7 +11,7 @@ import { Label as UiLabel } from '@/components/ui/label';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { ToastAction } from '@/components/ui/toast';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import type { Order, OrderStatus, Label } from '@/types/database';
 
@@ -180,6 +180,8 @@ function suggestNextGuide(last: string | null): string {
 
 export default function LabelsPage() {
   const [orders, setOrders] = useState<OrderWithLgs[]>([]);
+  const [searchParams] = useSearchParams();
+  const focusOrderId = searchParams.get('order');
   const [labels, setLabels] = useState<Map<string, Label>>(new Map());
   const [zplLabels, setZplLabels] = useState<Map<string, Label>>(new Map());
   const [labelHistory, setLabelHistory] = useState<Map<string, Label[]>>(new Map());
@@ -801,10 +803,19 @@ export default function LabelsPage() {
 
 
   // Only show orders that have at least one LG
-  const readyOrders = orders.filter(o => o.lg_codes.length > 0);
+  const readyOrders = orders.filter(o => o.lg_codes.length > 0 && (!focusOrderId || o.id === focusOrderId));
+  const focusedOrder = focusOrderId ? orders.find(o => o.id === focusOrderId) : undefined;
 
   return (
-    <MainLayout title="Etiquetas" subtitle="Gerar etiquetas por grupo de expedição (LG / Loja)">
+    <MainLayout title="Etiquetas e DESADV" subtitle="Emitir etiquetas por caixa e gerar o ficheiro DESADV">
+      {focusOrderId && !isLoading && (
+        <div className="mb-4 flex items-center justify-between rounded-lg border border-border bg-card px-4 py-2.5 text-sm">
+          <span className="text-muted-foreground">
+            A mostrar só a encomenda <span className="font-medium text-foreground">{focusedOrder?.order_number ?? ''}</span>
+          </span>
+          <Link to="/labels" className="text-primary hover:underline">Ver todas</Link>
+        </div>
+      )}
       {isLoading ? (
         <div className="py-12 flex items-center justify-center">
           <Loader2 className="w-8 h-8 animate-spin text-primary" />

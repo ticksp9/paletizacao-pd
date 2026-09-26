@@ -1,52 +1,93 @@
 import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { 
-  FileText, 
-  Package, 
-  Layers, 
-  Tag, 
-  Database, 
-  History, 
-  LogOut,
+import {
+  Home,
+  FileText,
   Upload,
-  Box,
-  Settings,
+  Tag,
+  Database,
+  Users,
+  History,
   Wrench,
-  ShieldCheck,
-  MapPin,
-  Hash,
-  Warehouse
+  LogOut,
+  Settings,
+  ChevronDown,
+  Package,
+  type LucideIcon,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
-import { useToast } from '@/hooks/use-toast';
 
-type NavItem = { name: string; href: string; icon: typeof Upload; roles?: Array<'admin' | 'operador' | 'etiquetas'> };
+type Role = 'admin' | 'operador' | 'etiquetas';
+type NavItem = { name: string; href: string; icon: LucideIcon; roles?: Role[]; match?: string[] };
 
-const navigation: NavItem[] = [
+const workNav: NavItem[] = [
+  { name: 'Início', href: '/', icon: Home },
+  { name: 'Encomendas', href: '/orders', icon: FileText, match: ['/orders', '/palletization', '/paletizacao'] },
+  { name: 'Etiquetas e DESADV', href: '/labels', icon: Tag },
   { name: 'Importar EDI', href: '/import', icon: Upload, roles: ['admin', 'operador'] },
-  { name: 'Encomendas', href: '/orders', icon: FileText },
-  { name: 'Paletização', href: '/palletization', icon: Layers, roles: ['admin', 'operador'] },
-  { name: 'Etiquetas', href: '/labels', icon: Tag },
-  { name: 'Histórico', href: '/history', icon: History },
 ];
 
-const masterData = [
-  { name: 'Artigos', href: '/master/articles', icon: Box },
-  { name: 'Importar Artigos', href: '/master/articles/import', icon: Upload },
+const masterData: NavItem[] = [
+  { name: 'Artigos', href: '/master/articles', icon: Package, match: ['/master/articles'] },
+  { name: 'LG / Lojas PD', href: '/master/lg-locations', icon: Package },
+  { name: 'Destinos', href: '/master/delivery-sites', icon: Package },
+  { name: 'Códigos PD por artigo', href: '/master/pd-article-codes', icon: Package },
+  { name: 'Moradas de entreposto', href: '/master/warehouse-addresses', icon: Package },
   { name: 'Embalagens', href: '/master/packaging', icon: Package },
-  { name: 'Destinos', href: '/master/delivery-sites', icon: MapPin },
-  { name: 'LG / Lojas PD', href: '/master/lg-locations', icon: Database },
-  { name: 'Códigos PD por Artigo', href: '/master/pd-article-codes', icon: Hash },
-  { name: 'Moradas Entrepostos', href: '/master/warehouse-addresses', icon: Warehouse },
 ];
+
+const roleLabel: Record<string, string> = {
+  admin: 'Administrador',
+  operador: 'Operador',
+  etiquetas: 'Etiquetas',
+  pendente: 'Pendente',
+};
+
+function isActivePath(pathname: string, item: NavItem): boolean {
+  if (item.href === '/') return pathname === '/';
+  const prefixes = item.match ?? [item.href];
+  return prefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+}
+
+function NavLinkItem({ item, pathname, badge }: { item: NavItem; pathname: string; badge?: number }) {
+  const active = isActivePath(pathname, item);
+  return (
+    <Link
+      to={item.href}
+      className={cn(
+        'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
+        active
+          ? 'bg-primary/10 font-medium text-primary'
+          : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+      )}
+    >
+      <item.icon className="h-4 w-4 shrink-0" />
+      <span className="flex-1 truncate">{item.name}</span>
+      {!!badge && (
+        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1.5 text-xs font-medium text-destructive-foreground">
+          {badge}
+        </span>
+      )}
+    </Link>
+  );
+}
+
+function SectionTitle({ children }: { children: string }) {
+  return <p className="px-3 pb-1 pt-5 text-xs font-medium text-muted-foreground/80">{children}</p>;
+}
 
 export function Sidebar() {
-  const location = useLocation();
-  const { profile, role, signOut, user } = useAuth();
-  const { toast } = useToast();
+  const { pathname } = useLocation();
+  const { profile, role, signOut } = useAuth();
   const [pendingCount, setPendingCount] = useState(0);
+  const inMasterData = masterData.some((item) => isActivePath(pathname, item));
+  const [masterOpen, setMasterOpen] = useState(inMasterData);
+
+  useEffect(() => {
+    if (inMasterData) setMasterOpen(true);
+  }, [inMasterData]);
 
   useEffect(() => {
     if (role !== 'admin') return;
@@ -58,7 +99,7 @@ export function Sidebar() {
         .eq('role', 'pendente');
       if (active) setPendingCount(count ?? 0);
     };
-    load();
+    void load();
     const interval = window.setInterval(() => { void load(); }, 20000);
     return () => {
       active = false;
@@ -66,143 +107,99 @@ export function Sidebar() {
     };
   }, [role]);
 
+  const canSee = (item: NavItem) => !item.roles || (!!role && item.roles.includes(role as Role));
+  const canEditMasterData = role === 'admin' || role === 'operador';
+  const initials = (profile?.name || 'U').trim().charAt(0).toUpperCase();
+
   return (
-    <aside className="fixed inset-y-0 left-0 z-50 w-64 bg-sidebar text-sidebar-foreground flex flex-col">
-      {/* Header */}
-      <div className="p-6 border-b border-sidebar-border">
-        <p className="text-xl font-bold text-white">
-          Paletização & EDI
-        </p>
-        <p className="text-sm text-sidebar-foreground/70 mt-1">
-          Sistema de Gestão
-        </p>
-      </div>
+    <aside className="fixed inset-y-0 left-0 z-50 flex w-60 flex-col border-r border-border bg-card">
+      <Link to="/" className="flex items-center gap-3 px-5 py-5">
+        <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+          <Package className="h-5 w-5" />
+        </span>
+        <span className="leading-tight">
+          <span className="block text-sm font-semibold text-foreground">Paletização & EDI</span>
+          <span className="block text-xs text-muted-foreground">Socerâmica · Pingo Doce</span>
+        </span>
+      </Link>
 
-      {/* Navigation */}
-      <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-        <p className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/50">
-          Operações
-        </p>
-        {navigation
-          .filter((item) => !item.roles || (role && item.roles.includes(role as any)))
-          .map((item) => {
-          const isActive = location.pathname === item.href;
-          return (
-            <Link
-              key={item.name}
-              to={item.href}
-              className={cn(
-                'flex items-center gap-3 px-3 py-3 rounded-lg text-sm font-medium transition-colors',
-                isActive
-                  ? 'bg-sidebar-primary text-sidebar-primary-foreground'
-                  : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-              )}
-            >
-              <item.icon className="w-5 h-5" />
-              {item.name}
-            </Link>
-          );
-        })}
+      <nav className="flex-1 overflow-y-auto px-3 pb-4">
+        <SectionTitle>Trabalho</SectionTitle>
+        <div className="space-y-0.5">
+          {workNav.filter(canSee).map((item) => (
+            <NavLinkItem key={item.href} item={item} pathname={pathname} />
+          ))}
+        </div>
 
-        {(role === 'admin' || role === 'operador') && (
-        <div className="pt-4">
-          <p className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/50">
-            Dados Mestre
-          </p>
-          {masterData.map((item) => {
-            const isActive = location.pathname === item.href;
-            return (
-              <Link
-                key={item.name}
-                to={item.href}
+        <SectionTitle>Configuração</SectionTitle>
+        <div className="space-y-0.5">
+          {canEditMasterData && (
+            <>
+              <button
+                type="button"
+                onClick={() => setMasterOpen((open) => !open)}
+                aria-expanded={masterOpen}
                 className={cn(
-                  'flex items-center gap-3 px-3 py-3 rounded-lg text-sm font-medium transition-colors',
-                  isActive
-                    ? 'bg-sidebar-primary text-sidebar-primary-foreground'
-                    : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+                  'flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
+                  inMasterData ? 'font-medium text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
                 )}
               >
-                <item.icon className="w-5 h-5" />
-                {item.name}
-              </Link>
-            );
-          })}
+                <Database className="h-4 w-4 shrink-0" />
+                <span className="flex-1 text-left">Dados mestre</span>
+                <ChevronDown className={cn('h-4 w-4 transition-transform', masterOpen && 'rotate-180')} />
+              </button>
+              {masterOpen && (
+                <div className="ml-5 space-y-0.5 border-l border-border pl-2">
+                  {masterData.map((item) => {
+                    const active = isActivePath(pathname, item);
+                    return (
+                      <Link
+                        key={item.href}
+                        to={item.href}
+                        className={cn(
+                          'block rounded-md px-3 py-1.5 text-sm transition-colors',
+                          active ? 'bg-primary/10 font-medium text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                        )}
+                      >
+                        {item.name}
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+          {role === 'admin' && (
+            <>
+              <NavLinkItem item={{ name: 'Utilizadores', href: '/admin', icon: Users }} pathname={pathname} badge={pendingCount} />
+              <NavLinkItem item={{ name: 'Histórico', href: '/history', icon: History }} pathname={pathname} />
+              <NavLinkItem item={{ name: 'Manutenção', href: '/admin/maintenance', icon: Wrench }} pathname={pathname} />
+            </>
+          )}
+          {role !== 'admin' && (
+            <NavLinkItem item={{ name: 'Histórico', href: '/history', icon: History }} pathname={pathname} />
+          )}
         </div>
-        )}
-
-        {role === 'admin' && (
-          <div className="pt-4">
-            <p className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/50">
-              Administração
-            </p>
-            <Link
-              to="/admin"
-              className={cn(
-                'flex items-center gap-3 px-3 py-3 rounded-lg text-sm font-medium transition-colors',
-                location.pathname === '/admin'
-                  ? 'bg-sidebar-primary text-sidebar-primary-foreground'
-                  : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-              )}
-            >
-              <Settings className="w-5 h-5" />
-              <span className="flex-1">Gestão de Utilizadores</span>
-              {pendingCount > 0 && (
-                <span className="inline-flex items-center justify-center min-w-[1.5rem] h-6 px-1.5 rounded-full bg-destructive text-destructive-foreground text-xs font-bold">
-                  {pendingCount}
-                </span>
-              )}
-            </Link>
-            <Link
-              to="/admin/maintenance"
-              className={cn(
-                'flex items-center gap-3 px-3 py-3 rounded-lg text-sm font-medium transition-colors',
-                location.pathname === '/admin/maintenance'
-                  ? 'bg-sidebar-primary text-sidebar-primary-foreground'
-                  : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-              )}
-            >
-              <Wrench className="w-5 h-5" />
-              Manutenção
-            </Link>
-          </div>
-        )}
       </nav>
 
-      {/* User section */}
-      <div className="p-4 border-t border-sidebar-border">
-        <div className="flex items-center gap-3 mb-3">
-          <div className="w-10 h-10 rounded-full bg-sidebar-accent flex items-center justify-center">
-            <span className="text-sm font-semibold text-sidebar-accent-foreground">
-              {profile?.name?.charAt(0)?.toUpperCase() || 'U'}
-            </span>
-          </div>
-          <div className="flex-1 min-w-0">
-            <Link to="/definicoes" className="text-sm font-medium text-white truncate hover:underline block">
-              {profile?.name || 'Utilizador'}
-            </Link>
-            <p className={`text-xs font-semibold uppercase tracking-wide ${role === 'admin' ? 'text-yellow-400' : 'text-sidebar-foreground/70'}`}>
-              Role: {role?.toUpperCase() || 'OPERADOR'}
-            </p>
-          </div>
-        </div>
-        <Link
-          to="/definicoes"
-          className={cn(
-            'flex items-center gap-2 w-full px-3 py-2 text-sm rounded-lg transition-colors mb-1',
-            location.pathname === '/definicoes'
-              ? 'bg-sidebar-primary text-sidebar-primary-foreground'
-              : 'text-sidebar-foreground hover:bg-sidebar-accent'
-          )}
-        >
-          <Settings className="w-4 h-4" />
-          Definições da Conta
+      <div className="border-t border-border p-3">
+        <Link to="/definicoes" className="flex items-center gap-3 rounded-md px-2 py-2 hover:bg-muted">
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-sm font-medium text-primary">
+            {initials}
+          </span>
+          <span className="min-w-0 flex-1 leading-tight">
+            <span className="block truncate text-sm font-medium text-foreground">{profile?.name || 'Utilizador'}</span>
+            <span className="block text-xs text-muted-foreground">{roleLabel[role ?? ''] ?? 'Utilizador'}</span>
+          </span>
+          <Settings className="h-4 w-4 text-muted-foreground" />
         </Link>
         <button
+          type="button"
           onClick={signOut}
-          className="flex items-center gap-2 w-full px-3 py-2 text-sm text-sidebar-foreground hover:bg-sidebar-accent rounded-lg transition-colors"
+          className="mt-1 flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
         >
-          <LogOut className="w-4 h-4" />
-          Terminar Sessão
+          <LogOut className="h-4 w-4" />
+          Terminar sessão
         </button>
       </div>
     </aside>
