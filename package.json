@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "name": "paletizacao-pd",
+  "scripts": {
+    "test": "node --test supabase/functions/_shared/labelVolumePlan.test.mjs supabase/functions/build-pallet-plan/preview.test.mjs supabase/functions/preview-labels-pdf/preview.test.mjs && node supabase/functions/generate-desadv-cd-802/dl-count-regression.mjs"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.3"
+  }
+}

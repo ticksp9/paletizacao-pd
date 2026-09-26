@@ -5,7 +5,7 @@ import { test } from "node:test";
 const preview = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
 const issuer = readFileSync(new URL("../generate-labels-pdf/index.ts", import.meta.url), "utf8");
 const page = readFileSync(new URL(
-  "../../../artifacts/paletizacao-edi/src/pages/LabelsPage.tsx", import.meta.url,
+  "../../../app/src/pages/LabelsPage.tsx", import.meta.url,
 ), "utf8");
 
 test("preview has no issuance or database/storage writes, even without a SOC", () => {

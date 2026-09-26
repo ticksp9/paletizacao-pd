@@ -10,3 +10,6 @@ dist/
 /supabase/.temp/
 .DS_Store
 Thumbs.db
+
+# node (testes na raiz)
+/node_modules/

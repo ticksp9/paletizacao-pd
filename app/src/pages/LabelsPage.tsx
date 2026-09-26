@@ -361,6 +361,16 @@ export default function LabelsPage() {
     if (!plans?.length) return 'pallet';
 
     const planIds = plans.map((plan) => plan.id);
+
+    // Planos gravados com um SOC por caixa levam sempre uma etiqueta por caixa: não perguntar.
+    const { count: perBoxSocCount, error: perBoxError } = await supabase
+      .from('pallet_items')
+      .select('id', { count: 'exact', head: true })
+      .in('palletization_plan_id', planIds)
+      .not('soc_code', 'is', null);
+    if (perBoxError) throw new Error(`Não foi possível verificar os SOC das caixas: ${perBoxError.message}`);
+    if ((perBoxSocCount ?? 0) > 0) return 'boxes';
+
     const { data: containers, error: containersError } = await supabase
       .from('pallet_store_containers')
       .select('palletization_plan_id, store_code')

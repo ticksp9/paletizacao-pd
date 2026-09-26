@@ -470,6 +470,7 @@ export type Database = {
           pos_z_mm: number | null
           quantity: number
           rotated: boolean
+          soc_code: string | null
           store_code: string | null
         }
         Insert: {
@@ -490,6 +491,7 @@ export type Database = {
           pos_z_mm?: number | null
           quantity: number
           rotated?: boolean
+          soc_code?: string | null
           store_code?: string | null
         }
         Update: {
@@ -510,6 +512,7 @@ export type Database = {
           pos_z_mm?: number | null
           quantity?: number
           rotated?: boolean
+          soc_code?: string | null
           store_code?: string | null
         }
         Relationships: [

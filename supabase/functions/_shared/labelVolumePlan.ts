@@ -4,6 +4,8 @@ export interface BoxGroup {
   store_code: string;
   lg_code: string;
   box_count: number;
+  /** SOC próprio de cada caixa (pallet_items.soc_code), pela ordem de colocação. */
+  box_socs?: string[];
 }
 
 export interface PlannedVolume {
@@ -36,7 +38,8 @@ export function planLabelVolumes(
   )) {
     throw new Error("Caixas da palete sem loja, LG ou quantidade válida");
   }
-  if (stores.size > 1 && socByStore.size === 0) {
+  const hasBoxSocs = groups.some((group) => (group.box_socs?.length ?? 0) > 0);
+  if (!hasBoxSocs && stores.size > 1 && socByStore.size === 0) {
     throw new Error("Palete mista sem SOC por loja em pallet_store_containers");
   }
 
@@ -45,6 +48,39 @@ export function planLabelVolumes(
     a.store_code.localeCompare(b.store_code) ||
     a.lg_code.localeCompare(b.lg_code)
   );
+
+  // Planos com SOC por caixa: sempre uma etiqueta por caixa, cada uma com o seu SOC.
+  // "Volume i de n" conta as caixas da loja nesta palete.
+  if (hasBoxSocs) {
+    const perBox: PlannedVolume[] = [];
+    for (const group of sorted) {
+      const socs = (group.box_socs ?? []).map((soc) => String(soc || "").trim());
+      if (socs.length !== group.box_count || socs.some((soc) => !soc)) {
+        throw new Error(`Caixas da loja ${group.store_code} sem SOC próprio em todas as caixas`);
+      }
+      for (const soc of socs) {
+        perBox.push({
+          store_code: group.store_code,
+          lg_code: group.lg_code,
+          soc_code: soc,
+          volume_no: 0,
+          volume_total: 0,
+          box_count: null,
+        });
+      }
+    }
+    const totalByStore = new Map<string, number>();
+    for (const volume of perBox) {
+      totalByStore.set(volume.store_code, (totalByStore.get(volume.store_code) || 0) + 1);
+    }
+    const nextByStore = new Map<string, number>();
+    for (const volume of perBox) {
+      volume.volume_no = (nextByStore.get(volume.store_code) || 0) + 1;
+      volume.volume_total = totalByStore.get(volume.store_code)!;
+      nextByStore.set(volume.store_code, volume.volume_no);
+    }
+    return perBox;
+  }
   const socFor = (storeCode: string): string => {
     const soc = socByStore.size > 0 ? socByStore.get(storeCode) : fallbackSoc;
     if (!soc?.trim()) throw new Error(`Palete sem SOC para a loja ${storeCode}`);

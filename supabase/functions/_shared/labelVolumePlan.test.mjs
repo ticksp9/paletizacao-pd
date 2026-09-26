@@ -60,3 +60,21 @@ test("volumes restart when the next pallet/SOC is planned", () => {
   assert.deepEqual(first.map((v) => v.volume_no), [1, 2]);
   assert.deepEqual(second.map((v) => v.volume_no), [1, 2]);
 });
+test("SOC por caixa: uma etiqueta por caixa, cada uma com o seu SOC, mesmo em palete dedicada", () => {
+  const groups = [
+    { store_code: "656", lg_code: "LG3001", box_count: 2, box_socs: ["SOC0000577", "SOC0000578"] },
+    { store_code: "655", lg_code: "LG3055", box_count: 3, box_socs: ["SOC0000574", "SOC0000575", "SOC0000576"] },
+  ];
+  for (const mode of ["pallet", "boxes"]) {
+    const volumes = planLabelVolumes(groups, new Map(), "", mode);
+    assert.deepEqual(volumes.map((v) => [v.store_code, v.soc_code, v.volume_no, v.volume_total]), [
+      ["655", "SOC0000574", 1, 3], ["655", "SOC0000575", 2, 3], ["655", "SOC0000576", 3, 3],
+      ["656", "SOC0000577", 1, 2], ["656", "SOC0000578", 2, 2],
+    ]);
+  }
+  const dedicated = [{ store_code: "669", lg_code: "LG1270", box_count: 2, box_socs: ["SOC0000600", "SOC0000601"] }];
+  assert.equal(planLabelVolumes(dedicated, new Map(), "", "pallet").length, 2);
+  assert.throws(() => planLabelVolumes(
+    [{ store_code: "669", lg_code: "LG1270", box_count: 2, box_socs: ["SOC0000600"] }], new Map(), "", "boxes",
+  ));
+});

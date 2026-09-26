@@ -142,7 +142,7 @@ async function collectPalletPairs(
   usePersistedPairs: boolean,
 ): Promise<BoxGroup[]> {
   const itemSelection = usePersistedPairs
-    ? "id, order_line_id, store_code, lg_code"
+    ? "id, order_line_id, store_code, lg_code, soc_code, layer_number, placement_sequence"
     : "order_line_id";
   const { data: items, count: itemCount, error: itemsError } = await supabase
     .from("pallet_items")
@@ -179,12 +179,21 @@ async function collectPalletPairs(
       }
     }
 
+    // Mesma ordem em que os SOC por caixa foram gerados: camada, sequência de colocação.
+    const orderedItems = [...(items || [])].sort((a, b) => {
+      const ra = a as { layer_number: number | null; placement_sequence: number | null; id: string };
+      const rb = b as { layer_number: number | null; placement_sequence: number | null; id: string };
+      return (ra.layer_number ?? 0) - (rb.layer_number ?? 0) ||
+        (ra.placement_sequence ?? Number.MAX_SAFE_INTEGER) - (rb.placement_sequence ?? Number.MAX_SAFE_INTEGER) ||
+        String(ra.id).localeCompare(String(rb.id));
+    });
     const groups = new Map<string, BoxGroup>();
-    for (const item of items || []) {
+    for (const item of orderedItems) {
       const row = item as {
         order_line_id: string | null;
         store_code: string | null;
         lg_code: string | null;
+        soc_code: string | null;
       };
       const storeCode = String(row.store_code || "").trim();
       const lgCode = String(row.lg_code || "").trim();
@@ -202,9 +211,19 @@ async function collectPalletPairs(
       }
 
       const key = `${storeCode}|${lgCode}`;
+      const boxSoc = String(row.soc_code || "").trim();
       const group = groups.get(key);
-      if (group) group.box_count++;
-      else groups.set(key, { store_code: storeCode, lg_code: lgCode, box_count: 1 });
+      if (group) {
+        group.box_count++;
+        if (boxSoc) (group.box_socs ??= []).push(boxSoc);
+      } else {
+        groups.set(key, {
+          store_code: storeCode,
+          lg_code: lgCode,
+          box_count: 1,
+          ...(boxSoc ? { box_socs: [boxSoc] } : {}),
+        });
+      }
     }
     return [...groups.values()];
   }

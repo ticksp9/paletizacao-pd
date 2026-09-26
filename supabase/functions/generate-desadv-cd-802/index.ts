@@ -480,6 +480,8 @@ Deno.serve(async (req) => {
     const lineBoxesBySoc = new Map<string, number>();
     const containerBoxesByLineSoc = new Map<string, number>();
     const palletItemCountByLineSoc = new Map<string, number>();
+    // SOC próprio de cada caixa (planos gravados com um SOC por caixa).
+    const perBoxSocs = new Set<string>();
     const containerMappingErrors: string[] = [];
 
     if (planIds.length > 0) {
@@ -500,11 +502,12 @@ Deno.serve(async (req) => {
         palletization_plan_id: string;
         box_number: number | null;
         store_code: string | null;
+        soc_code?: string | null;
       }> = [];
       if (itemCount < pageSize) {
         const { data, error } = await supabase
           .from("pallet_items")
-          .select("order_line_id, palletization_plan_id, box_number, store_code")
+          .select("order_line_id, palletization_plan_id, box_number, store_code, soc_code")
           .in("palletization_plan_id", planIds);
         if (error) throw new Error(`Erro ao buscar itens de palete: ${error.message}`);
         if (!data || data.length !== itemCount) {
@@ -518,7 +521,7 @@ Deno.serve(async (req) => {
           const pageEnd = Math.min(offset + pageSize, itemCount) - 1;
           const { data, error } = await supabase
             .from("pallet_items")
-            .select("id, order_line_id, palletization_plan_id, box_number, store_code")
+            .select("id, order_line_id, palletization_plan_id, box_number, store_code, soc_code")
             .in("palletization_plan_id", planIds)
             .order("id", { ascending: true })
             .range(offset, pageEnd);
@@ -615,6 +618,36 @@ Deno.serve(async (req) => {
       for (const item of rawItems) {
         if (!item.order_line_id) continue;
         const plan = planMap.get(item.palletization_plan_id);
+
+        const boxSoc = String(item.soc_code || "").trim();
+        if (boxSoc) {
+          const orderLine = orderLineById.get(item.order_line_id);
+          if (!orderLine) {
+            containerMappingErrors.push(
+              `Item de palete sem linha de encomenda correspondente no palete ${plan?.palletNumber ?? item.palletization_plan_id}`,
+            );
+            continue;
+          }
+          const itemStoreCode = String(item.store_code || "").trim();
+          const orderStoreCode = String(orderLine.store_code || "").trim();
+          if (itemStoreCode && orderStoreCode && itemStoreCode !== orderStoreCode) {
+            containerMappingErrors.push(
+              `Loja divergente no palete ${plan?.palletNumber ?? item.palletization_plan_id}, linha ${orderLine.line_number}: item ${itemStoreCode}, encomenda ${orderStoreCode}`,
+            );
+            continue;
+          }
+          if (perBoxSocs.has(boxSoc)) {
+            containerMappingErrors.push(`SOC ${boxSoc} repetido em mais de uma caixa`);
+            continue;
+          }
+          perBoxSocs.add(boxSoc);
+          if (!lineSocMap.has(item.order_line_id)) lineSocMap.set(item.order_line_id, new Set());
+          lineSocMap.get(item.order_line_id)!.add(boxSoc);
+          const lineSocKey = `${item.order_line_id}|${boxSoc}`;
+          containerBoxesByLineSoc.set(lineSocKey, 1);
+          palletItemCountByLineSoc.set(lineSocKey, 1);
+          continue;
+        }
 
         if (plansWithContainers.has(item.palletization_plan_id)) {
           const orderLine = orderLineById.get(item.order_line_id);
@@ -760,9 +793,20 @@ Deno.serve(async (req) => {
         }))
         : [];
       const totalMappedBoxes = boxesPerSoc.reduce((sum, item) => sum + item.boxes, 0) || 1;
+      // Um SOC por caixa: cada caixa leva as peças de uma caixa cheia e a última leva o resto
+      // (ex.: 50 peças, 12 por caixa → 12, 12, 12, 12, 2).
+      const allPerBox = boxesPerSoc.length > 0 && boxesPerSoc.every((item) => perBoxSocs.has(item.soc));
+      let remainingQty = lineQty;
 
-      for (const { soc, boxes, palletItemCount } of boxesPerSoc) {
-        const qtyForSoc = socCodes.length === 1 ? lineQty : lineQty * (boxes / totalMappedBoxes);
+      for (const [socIndex, { soc, boxes, palletItemCount }] of boxesPerSoc.entries()) {
+        let qtyForSoc: number;
+        if (allPerBox) {
+          const isLast = socIndex === boxesPerSoc.length - 1;
+          qtyForSoc = isLast ? remainingQty : Math.min(piecesPerBox, remainingQty);
+          remainingQty -= qtyForSoc;
+        } else {
+          qtyForSoc = socCodes.length === 1 ? lineQty : lineQty * (boxes / totalMappedBoxes);
+        }
         dg.dlEntries.push({
           storeCode,
           lgCode,
