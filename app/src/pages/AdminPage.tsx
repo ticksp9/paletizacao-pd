@@ -307,11 +307,13 @@ export default function AdminPage() {
           /* clipboard indisponível */
         }
         toast({
-          title: 'Link de convite gerado',
-          description: `Link copiado para a área de transferência. Envie-o a ${u.email} caso o email não chegue.`,
+          title: 'Link para definir a palavra-passe copiado',
+          description: res?.email_sent
+            ? `Também foi enviado por email para ${u.email}. Se não chegar, envie-lhe o link copiado (válido durante pouco tempo).`
+            : `O email não pôde ser enviado. Envie a ${u.email} o link que foi copiado (válido durante pouco tempo).`,
         });
       } else {
-        toast({ title: 'Convite reenviado', description: `Novo email enviado para ${u.email}.` });
+        toast({ title: 'Email enviado', description: `Enviado para ${u.email}.` });
       }
     } catch (e: any) {
       toast({ title: 'Erro', description: e.message, variant: 'destructive' });
@@ -550,7 +552,7 @@ export default function AdminPage() {
                             </SelectContent>
                           </Select>
                           {!confirmed && (
-                            <IndustrialButton variant="ghost" size="sm" onClick={() => handleResend(u)} isLoading={actionLoading === u.user_id + ':resend'} title="Reenviar convite">
+                            <IndustrialButton variant="ghost" size="sm" onClick={() => handleResend(u)} isLoading={actionLoading === u.user_id + ':resend'} title="Enviar link para definir a palavra-passe">
                               <RefreshCw className="w-4 h-4" />
                             </IndustrialButton>
                           )}
@@ -617,8 +619,8 @@ export default function AdminPage() {
                 <label className="flex items-start gap-3 p-3 border-2 border-border rounded-lg cursor-pointer hover:border-primary/50">
                   <RadioGroupItem value="password" className="mt-1" />
                   <div>
-                    <div className="font-medium">Criar com password</div>
-                    <div className="text-xs text-muted-foreground">Recomendado — não depende de email.</div>
+                    <div className="font-medium">Criar com palavra-passe temporária</div>
+                    <div className="text-xs text-muted-foreground">Recomendado. Não depende de email; a pessoa escolhe a sua palavra-passe no primeiro acesso.</div>
                   </div>
                 </label>
                 <label className="flex items-start gap-3 p-3 border-2 border-border rounded-lg cursor-pointer hover:border-primary/50">

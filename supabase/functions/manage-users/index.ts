@@ -20,6 +20,20 @@ function fail(status: number, error: string, code: string, extra: Record<string,
   return json(status, { error, code, ...extra });
 }
 
+const DEFAULT_APP_URL = "https://paletizacao-pd.vercel.app";
+
+// Endereço da app para onde os links de convite/recuperação levam o utilizador.
+// Usa a origem do pedido (a app que chamou a função) quando é um endereço conhecido.
+function appUrl(req: Request): string {
+  const configured = (Deno.env.get("APP_URL") || "").trim().replace(/\/$/, "");
+  const origin = (req.headers.get("origin") || "").trim().replace(/\/$/, "");
+  const trusted = /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin) ||
+    /^http:\/\/localhost:\d+$/i.test(origin) ||
+    (configured !== "" && origin === configured);
+  if (trusted) return origin;
+  return configured || DEFAULT_APP_URL;
+}
+
 function normalizeEmail(value: unknown) {
   return String(value || "").trim().toLowerCase();
 }
@@ -188,8 +202,8 @@ Deno.serve(async (req) => {
       if (existing) return fail(409, "Já existe um utilizador com este email.", "email_exists", { user_id: existing.id, existing: true });
 
       const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
-        data: { name: name || email.split("@")[0], initial_role: role },
-        redirectTo: `${new URL(req.url).origin.replace("functions.", "")}/login`,
+        data: { name: name || email.split("@")[0] },
+        redirectTo: `${appUrl(req)}/definir-password`,
       });
       if (inviteError || !invited?.user) {
         return fail(400, `Falha ao enviar convite: ${inviteError?.message || "resposta inválida"}.`, "invite_failed");
@@ -199,7 +213,7 @@ Deno.serve(async (req) => {
           user_id: invited.user.id,
           name: name || email.split("@")[0],
           email,
-          must_change_password: false,
+          must_change_password: true,
         }, { onConflict: "user_id" });
         if (profileError) throw new Error(`Falha ao gravar perfil: ${profileError.message}`);
         await setRole(admin, invited.user.id, role);
@@ -234,7 +248,7 @@ Deno.serve(async (req) => {
         email,
         password,
         email_confirm: true,
-        user_metadata: { name: name || email.split("@")[0], initial_role: role },
+        user_metadata: { name: name || email.split("@")[0] },
       });
       if (createError || !created.user) {
         const duplicate = /already|registered|exists/i.test(createError?.message || "");
@@ -250,7 +264,8 @@ Deno.serve(async (req) => {
           user_id: created.user.id,
           name: name || email.split("@")[0],
           email,
-          must_change_password: false,
+          // Palavra-passe definida pelo administrador é temporária: o utilizador muda-a no 1.º acesso.
+          must_change_password: true,
         }, { onConflict: "user_id" });
         if (profileError) throw new Error(`Falha ao gravar perfil: ${profileError.message}`);
         await setRole(admin, created.user.id, role);
@@ -277,7 +292,7 @@ Deno.serve(async (req) => {
       if (password.length < 8) return fail(400, "A password deve ter pelo menos 8 caracteres.", "invalid_password");
       const { error } = await admin.auth.admin.updateUserById(targetId, { password, email_confirm: true });
       if (error) return fail(400, `Não foi possível repor a password: ${error.message}`, "password_reset_failed");
-      const { error: profileError } = await admin.from("profiles").update({ must_change_password: false }).eq("user_id", targetId);
+      const { error: profileError } = await admin.from("profiles").update({ must_change_password: true }).eq("user_id", targetId);
       if (profileError) return fail(500, `Password alterada, mas falhou a atualização do perfil: ${profileError.message}`, "profile_update_failed");
       await writeHistory(admin, { entity_type: "user", entity_id: targetId, action: "password_reset", performed_by: user.id, details: { by: user.email } });
       return json(200, { success: true, user_id: targetId, email_confirm: true });
@@ -313,10 +328,19 @@ Deno.serve(async (req) => {
     if (action === "resend") {
       const email = normalizeEmail(body.email);
       if (!email) return fail(400, "Email obrigatório.", "email_required");
-      const redirectTo = `${new URL(req.url).origin.replace("functions.", "")}/login`;
-      const { data, error } = await admin.auth.admin.generateLink({ type: "invite", email, options: { redirectTo } });
-      if (error || !data) return fail(400, `Não foi possível gerar o link de convite: ${error?.message || "resposta inválida"}.`, "invite_link_failed");
-      return json(200, { success: true, action_link: data?.properties?.action_link ?? null, message: "Link de convite gerado." });
+      const redirectTo = `${appUrl(req)}/definir-password`;
+      // "recovery" funciona para contas já existentes (o tipo "invite" falha se a conta já existe).
+      const { data, error } = await admin.auth.admin.generateLink({ type: "recovery", email, options: { redirectTo } });
+      if (error || !data) return fail(400, `Não foi possível gerar o link: ${error?.message || "resposta inválida"}.`, "invite_link_failed");
+      // Tenta também enviar o email; sem SMTP próprio o Supabase só entrega à equipa do projeto.
+      const { error: mailError } = await admin.auth.resetPasswordForEmail(email, { redirectTo });
+      return json(200, {
+        success: true,
+        action_link: data?.properties?.action_link ?? null,
+        email_sent: !mailError,
+        email_error: mailError?.message ?? null,
+        message: "Link para definir a palavra-passe gerado.",
+      });
     }
 
     if (action === "remove") {

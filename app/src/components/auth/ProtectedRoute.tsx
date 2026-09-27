@@ -4,7 +4,7 @@ import { Loader2 } from 'lucide-react';
 import PendingApprovalPage from '@/pages/PendingApprovalPage';
 
 export function ProtectedRoute() {
-  const { user, isLoading, role } = useAuth();
+  const { user, isLoading, role, profile } = useAuth();
 
   if (isLoading) {
     return (
@@ -18,6 +18,8 @@ export function ProtectedRoute() {
   }
 
   if (!user) return <Navigate to="/login" replace />;
+  // Palavra-passe temporária dada pelo administrador: tem de ser trocada antes de continuar.
+  if (profile?.must_change_password) return <Navigate to="/definir-password" replace />;
   if (role === 'pendente' || role === null) return <PendingApprovalPage />;
   return <Outlet />;
 }

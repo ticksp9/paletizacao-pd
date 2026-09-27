@@ -9,6 +9,7 @@ import { ErrorBoundary } from "@/components/error-boundary";
 
 import LoginPage from "./pages/LoginPage";
 import DashboardPage from "./pages/DashboardPage";
+import SetPasswordPage from "./pages/SetPasswordPage";
 import ImportEDIPage from "./pages/ImportEDIPage";
 import OrdersPage from "./pages/OrdersPage";
 import PalletizationPage from "./pages/PalletizationPage";
@@ -35,6 +36,7 @@ const AppRoutes = () => {
     <ErrorBoundary resetKey={pathname}>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/definir-password" element={<SetPasswordPage />} />
         <Route element={<ProtectedRoute />}>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/import" element={<ImportEDIPage />} />
