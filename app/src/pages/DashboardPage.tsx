@@ -26,7 +26,7 @@ interface DashboardOrder {
 const stageInfo: Record<Stage, { label: string; action: string; icon: typeof Layers; step: number }> = {
   paletizar: { label: 'Por paletizar', action: 'Paletizar', icon: Layers, step: 0 },
   etiquetas: { label: 'Etiquetas por emitir', action: 'Emitir etiquetas', icon: Tag, step: 1 },
-  desadv: { label: 'DESADV por gerar', action: 'Gerar DESADV', icon: Send, step: 2 },
+  desadv: { label: 'Ficheiro por gerar', action: 'Gerar ficheiro', icon: Send, step: 2 },
   concluida: { label: 'Concluídas', action: 'Ver', icon: CheckCircle2, step: 3 },
 };
 
@@ -253,7 +253,7 @@ export default function DashboardPage() {
                     <span className="font-medium text-foreground">{order.order_number}</span>
                     <span className="text-muted-foreground">{order.warehouse}</span>
                     <span className="flex items-center gap-1.5 text-emerald-600">
-                      <CheckCircle2 className="h-4 w-4" /> DESADV gerado
+                      <CheckCircle2 className="h-4 w-4" /> Ficheiro gerado
                     </span>
                   </Link>
                 ))}
