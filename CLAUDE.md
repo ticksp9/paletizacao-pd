@@ -29,3 +29,15 @@ gera etiquetas SOC (PDF/ZPL) e o DESADV CSV (CD 802). Utilizador fala português
 - LG vem sempre do XML (`LocationID`); a tabela de LGs pode estar desatualizada.
 - Etiquetas: paletes mistas = uma por caixa ("Volume i de n"); paletes de uma loja = perguntar (uma por palete ou por caixa).
 - DESADV: DL[11] = caixas dessa linha nesse SOC; DG[18] = soma dos DL[11]. Depois do DESADV não se repaletiza.
+
+## Permissões (confirmadas pelo utilizador em 2026-09-27)
+| Ação | admin | operador | etiquetas |
+|---|---|---|---|
+| Início e encomendas (ver) | sim | sim | sim |
+| Importar EDI, paletizar, gerar DESADV | sim | sim | não |
+| Emitir etiquetas | sim | sim | sim |
+| Dados mestre: ver | sim | sim | não |
+| Dados mestre: alterar/importar | sim | não | não |
+| Utilizadores, histórico, manutenção | sim | não | não |
+Contas novas ficam sempre "pendente" (o registo nunca define o papel). Palavra-passe dada pelo admin é
+temporária (`must_change_password`) e é trocada em /definir-password no primeiro acesso.
