@@ -776,7 +776,8 @@ export default function LgLocationsPage() {
         </IndustrialCard>
       )}
 
-      {/* Master import (GJMLGS) */}
+      {/* Master import (GJMLGS) — só administradores */}
+      {isAdmin && (
       <IndustrialCard className="mb-6">
         <IndustrialCardHeader
           title="Importar master GJMLGS (xlsx/csv)"
@@ -822,6 +823,7 @@ export default function LgLocationsPage() {
           </div>
         )}
       </IndustrialCard>
+      )}
 
       {/* Simple import with preview */}
       {isAdmin && (

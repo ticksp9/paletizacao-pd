@@ -10,7 +10,8 @@ import {
   supabase,
 } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import { useNavigate } from 'react-router-dom';
+import { Navigate, useNavigate } from 'react-router-dom';
+import { useAuth } from '@/contexts/AuthContext';
 import { sanitizeFilename } from '@/lib/utils';
 
 interface ImportReport {
@@ -28,6 +29,7 @@ export default function ImportArticlesPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
   const navigate = useNavigate();
+  const { isAdmin } = useAuth();
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -93,6 +95,9 @@ export default function ImportArticlesPage() {
       setIsProcessing(false);
     }
   };
+
+  // Importar artigos altera dados mestre: só administradores.
+  if (!isAdmin) return <Navigate to="/master/articles" replace />;
 
   return (
     <MainLayout
