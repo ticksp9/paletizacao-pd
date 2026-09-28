@@ -5,7 +5,7 @@ import { IndustrialCard } from '@/components/ui/IndustrialCard';
 import { IndustrialButton } from '@/components/ui/IndustrialButton';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label as UiLabel } from '@/components/ui/label';
 import { supabase } from '@/integrations/supabase/client';
@@ -969,15 +969,6 @@ export default function LabelsPage() {
                         </IndustrialButton>
                       </>
                     )}
-                    <IndustrialButton
-                      variant="ghost"
-                      onClick={() => handlePickingSheet(order, 'view', 'soc')}
-                      isLoading={isBusy(order.id, 'picking')}
-                      icon={<Boxes className="w-5 h-5" />}
-                      title="Uma linha por caixa: SOC, loja, LG, artigo e quantidade"
-                    >
-                      Lista de caixas (SOC)
-                    </IndustrialButton>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <IndustrialButton
@@ -989,9 +980,13 @@ export default function LabelsPage() {
                         </IndustrialButton>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => handlePickingSheet(order, 'view', 'soc')}>
+                          <Boxes className="w-4 h-4 mr-2" /> Ver lista de caixas (SOC)
+                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => handlePickingSheet(order, 'print', 'soc')}>
                           <Printer className="w-4 h-4 mr-2" /> Imprimir lista de caixas (SOC)
                         </DropdownMenuItem>
+                        <DropdownMenuSeparator />
                         <DropdownMenuItem onClick={() => handlePickingSheet(order, 'view', 'per_lg')}>
                           <Eye className="w-4 h-4 mr-2" /> Ver PDF (por LG)
                         </DropdownMenuItem>
