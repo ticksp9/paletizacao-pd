@@ -283,7 +283,6 @@ Deno.serve(async (req) => {
 
       const lgNum = (lg: string) => parseInt(lg.replace(/\D/g, ""), 10) || 0;
       boxes.sort((a, b) =>
-        a.pallet - b.pallet ||
         lgNum(b.lg) - lgNum(a.lg) ||
         (parseInt(a.store, 10) || 0) - (parseInt(b.store, 10) || 0) ||
         a.soc.localeCompare(b.soc, "pt", { numeric: true })
@@ -297,9 +296,10 @@ Deno.serve(async (req) => {
       const PW = A4_H, PH = A4_W; // horizontal
       const MG = 28;
       const usableW = PW - MG * 2;
-      const colW = [0.055, 0.12, 0.055, 0.17, 0.065, 0.12, 0.29, 0.07, 0.055].map((p) => p * usableW);
-      const colLabels = ["Palete", "SOC", "Loja", "Nome da loja", "LG", "Artigo (EAN)", "Descrição", "Qtd. cx", "Conf."];
-      const colAlign: Array<"left" | "right" | "center"> = ["center", "left", "left", "left", "left", "left", "left", "right", "center"];
+      // Sem coluna de palete por agora (pedido do utilizador); a ordem é a das etiquetas por LG.
+      const colW = [0.13, 0.06, 0.19, 0.07, 0.13, 0.30, 0.07, 0.05].map((p) => p * usableW);
+      const colLabels = ["SOC", "Loja", "Nome da loja", "LG", "Artigo (EAN)", "Descrição", "Qtd. cx", "Conf."];
+      const colAlign: Array<"left" | "right" | "center"> = ["left", "left", "left", "left", "left", "left", "right", "center"];
       const colX: number[] = [];
       { let acc = MG; for (const w of colW) { colX.push(acc); acc += w; } }
       const ROW = 15;
@@ -331,23 +331,22 @@ Deno.serve(async (req) => {
       let i = 0;
       let totalUnits = 0;
       while (i < boxes.length) {
-        const groupKey = `${boxes[i].pallet}|${boxes[i].store}`;
+        const groupKey = boxes[i].store;
         let gBoxes = 0, gUnits = 0;
         const first = boxes[i];
-        while (i < boxes.length && `${boxes[i].pallet}|${boxes[i].store}` === groupKey) {
+        while (i < boxes.length && boxes[i].store === groupKey) {
           const b = boxes[i];
           if (y < MG + 30) { ({ page: pg, y } = header()); }
           if (shade) pg.drawRectangle({ x: MG, y: y - 3.5, width: usableW, height: ROW, color: rgb(0.955, 0.962, 0.972) });
-          cell(pg, 0, String(b.pallet), y, mS, 9);
-          cell(pg, 1, b.soc || "SEM SOC", y, mbS, 10, b.soc ? rgb(0, 0, 0) : rgb(0.75, 0.1, 0.1));
-          cell(pg, 2, b.store || "-", y, mS, 9);
-          cell(pg, 3, b.storeName || "-", y, fS, 9);
-          cell(pg, 4, (b.lg || "-").replace(/^LG/i, ""), y, mS, 9);
-          cell(pg, 5, b.ean || "-", y, mS, 9);
-          cell(pg, 6, b.description || "-", y, fS, 9);
-          cell(pg, 7, String(Math.round(b.qty)), y, mbS, 10);
+          cell(pg, 0, b.soc || "SEM SOC", y, mbS, 10, b.soc ? rgb(0, 0, 0) : rgb(0.75, 0.1, 0.1));
+          cell(pg, 1, b.store || "-", y, mS, 9);
+          cell(pg, 2, b.storeName || "-", y, fS, 9);
+          cell(pg, 3, (b.lg || "-").replace(/^LG/i, ""), y, mS, 9);
+          cell(pg, 4, b.ean || "-", y, mS, 9);
+          cell(pg, 5, b.description || "-", y, fS, 9);
+          cell(pg, 6, String(Math.round(b.qty)), y, mbS, 10);
           // quadrado para marcar na conferência
-          const bx = colX[8] + colW[8] / 2 - 4.5;
+          const bx = colX[7] + colW[7] / 2 - 4.5;
           pg.drawRectangle({ x: bx, y: y - 2, width: 9, height: 9, borderColor: rgb(0.3, 0.3, 0.3), borderWidth: 0.8 });
           y -= ROW;
           gBoxes++; gUnits += b.qty;
@@ -356,17 +355,17 @@ Deno.serve(async (req) => {
         totalUnits += gUnits;
         if (y < MG + 30) { ({ page: pg, y } = header()); }
         pg.drawLine({ start: { x: MG, y: y + ROW - 3 }, end: { x: PW - MG, y: y + ROW - 3 }, thickness: 0.6, color: rgb(0.6, 0.63, 0.7) });
-        pg.drawText(fit(bS, `Palete ${first.pallet} - Loja ${first.store}: ${gBoxes} caixa(s)`, 8.5, colW[3] + colW[4] + colW[5] - 6), {
-          x: colX[3] + 3, y, size: 8.5, font: bS, color: rgb(0, 0.25, 0.55),
+        pg.drawText(fit(bS, `Loja ${first.store}: ${gBoxes} caixa(s)`, 8.5, colW[2] + colW[3] + colW[4] - 6), {
+          x: colX[2] + 3, y, size: 8.5, font: bS, color: rgb(0, 0.25, 0.55),
         });
-        cell(pg, 7, String(Math.round(gUnits)), y, mbS, 9, rgb(0, 0.25, 0.55));
+        cell(pg, 6, String(Math.round(gUnits)), y, mbS, 9, rgb(0, 0.25, 0.55));
         y -= ROW + 3;
         shade = !shade;
       }
       if (y < MG + 30) { ({ page: pg, y } = header()); }
       pg.drawRectangle({ x: MG, y: y - 4, width: usableW, height: 16, color: rgb(0.88, 0.93, 0.98) });
-      pg.drawText(`TOTAL: ${boxes.length} caixas`, { x: colX[3] + 3, y, size: 9.5, font: bS });
-      cell(pg, 7, String(Math.round(totalUnits)), y, mbS, 10);
+      pg.drawText(`TOTAL: ${boxes.length} caixas`, { x: colX[2] + 3, y, size: 9.5, font: bS });
+      cell(pg, 6, String(Math.round(totalUnits)), y, mbS, 10);
 
       const totalPagesS = pagesS.length;
       pagesS.forEach((p, idx) => {
