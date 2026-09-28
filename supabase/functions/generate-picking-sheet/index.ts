@@ -297,9 +297,11 @@ Deno.serve(async (req) => {
       const MG = 28;
       const usableW = PW - MG * 2;
       // Sem coluna de palete por agora (pedido do utilizador); a ordem é a das etiquetas por LG.
-      const colW = [0.13, 0.06, 0.19, 0.07, 0.13, 0.30, 0.07, 0.05].map((p) => p * usableW);
-      const colLabels = ["SOC", "Loja", "Nome da loja", "LG", "Artigo (EAN)", "Descrição", "Qtd. cx", "Conf."];
-      const colAlign: Array<"left" | "right" | "center"> = ["left", "left", "left", "left", "left", "left", "right", "center"];
+      // "Caixas" = n.º de caixas da linha (1: cada linha é uma caixa com o seu SOC);
+      // "Peças" = peças dentro dessa caixa.
+      const colW = [0.13, 0.06, 0.18, 0.07, 0.13, 0.26, 0.06, 0.06, 0.05].map((p) => p * usableW);
+      const colLabels = ["SOC", "Loja", "Nome da loja", "LG", "Artigo (EAN)", "Descrição", "Caixas", "Peças", "Conf."];
+      const colAlign: Array<"left" | "right" | "center"> = ["left", "left", "left", "left", "left", "left", "right", "right", "center"];
       const colX: number[] = [];
       { let acc = MG; for (const w of colW) { colX.push(acc); acc += w; } }
       const ROW = 15;
@@ -344,9 +346,10 @@ Deno.serve(async (req) => {
           cell(pg, 3, (b.lg || "-").replace(/^LG/i, ""), y, mS, 9);
           cell(pg, 4, b.ean || "-", y, mS, 9);
           cell(pg, 5, b.description || "-", y, fS, 9);
-          cell(pg, 6, String(Math.round(b.qty)), y, mbS, 10);
+          cell(pg, 6, "1", y, mbS, 10);
+          cell(pg, 7, String(Math.round(b.qty)), y, mS, 9);
           // quadrado para marcar na conferência
-          const bx = colX[7] + colW[7] / 2 - 4.5;
+          const bx = colX[8] + colW[8] / 2 - 4.5;
           pg.drawRectangle({ x: bx, y: y - 2, width: 9, height: 9, borderColor: rgb(0.3, 0.3, 0.3), borderWidth: 0.8 });
           y -= ROW;
           gBoxes++; gUnits += b.qty;
@@ -359,8 +362,9 @@ Deno.serve(async (req) => {
       y -= 4;
       if (y < MG + 30) { ({ page: pg, y } = header()); }
       pg.drawRectangle({ x: MG, y: y - 4, width: usableW, height: 16, color: rgb(0.88, 0.93, 0.98) });
-      pg.drawText(`TOTAL: ${boxes.length} caixas`, { x: colX[2] + 3, y, size: 9.5, font: bS });
-      cell(pg, 6, String(Math.round(totalUnits)), y, mbS, 10);
+      pg.drawText(`TOTAL: ${boxes.length} caixas - ${Math.round(totalUnits)} peças`, { x: colX[2] + 3, y, size: 9.5, font: bS });
+      cell(pg, 6, String(boxes.length), y, mbS, 10);
+      cell(pg, 7, String(Math.round(totalUnits)), y, mbS, 9);
 
       const totalPagesS = pagesS.length;
       pagesS.forEach((p, idx) => {
