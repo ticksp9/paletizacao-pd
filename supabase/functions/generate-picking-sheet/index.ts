@@ -353,15 +353,10 @@ Deno.serve(async (req) => {
           i++;
         }
         totalUnits += gUnits;
-        if (y < MG + 30) { ({ page: pg, y } = header()); }
-        pg.drawLine({ start: { x: MG, y: y + ROW - 3 }, end: { x: PW - MG, y: y + ROW - 3 }, thickness: 0.6, color: rgb(0.6, 0.63, 0.7) });
-        pg.drawText(fit(bS, `Loja ${first.store}: ${gBoxes} caixa(s)`, 8.5, colW[2] + colW[3] + colW[4] - 6), {
-          x: colX[2] + 3, y, size: 8.5, font: bS, color: rgb(0, 0.25, 0.55),
-        });
-        cell(pg, 6, String(Math.round(gUnits)), y, mbS, 9, rgb(0, 0.25, 0.55));
-        y -= ROW + 3;
+        // Sem subtotal por loja (pedido do utilizador): só a mudança de fundo separa as lojas.
         shade = !shade;
       }
+      y -= 4;
       if (y < MG + 30) { ({ page: pg, y } = header()); }
       pg.drawRectangle({ x: MG, y: y - 4, width: usableW, height: 16, color: rgb(0.88, 0.93, 0.98) });
       pg.drawText(`TOTAL: ${boxes.length} caixas`, { x: colX[2] + 3, y, size: 9.5, font: bS });
