@@ -835,11 +835,16 @@ export type Database = {
     Functions: {
       bootstrap_admin: { Args: never; Returns: boolean }
       generate_soc_code: { Args: never; Returns: string }
-      order_desadv_locked: { Args: { p_order_id: string }; Returns: boolean }
-      reopen_order_for_replan: {
-        Args: { p_order_id: string; p_reason: string }
+      mark_order_delivered: {
+        Args: { p_order_id: string; p_note?: string | null }
         Returns: Json
       }
+      order_change_block_reason: {
+        Args: { p_order_id: string; p_actor_user_id: string | null }
+        Returns: string | null
+      }
+      order_file_issued: { Args: { p_order_id: string }; Returns: boolean }
+      order_is_delivered: { Args: { p_order_id: string }; Returns: boolean }
       get_user_role: {
         Args: { _user_id: string }
         Returns: Database["public"]["Enums"]["app_role"]

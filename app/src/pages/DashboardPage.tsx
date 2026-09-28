@@ -2,14 +2,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
 import { pt } from 'date-fns/locale';
-import { ArrowRight, CheckCircle2, Layers, Loader2, Send, Tag, Upload } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Layers, Loader2, Send, Tag, Truck, Upload } from 'lucide-react';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { Button } from '@/components/ui/button';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 
-type Stage = 'paletizar' | 'etiquetas' | 'desadv' | 'concluida';
+type Stage = 'paletizar' | 'etiquetas' | 'desadv' | 'enviada' | 'concluida';
 
 interface DashboardOrder {
   id: string;
@@ -27,11 +27,13 @@ const stageInfo: Record<Stage, { label: string; action: string; icon: typeof Lay
   paletizar: { label: 'Por paletizar', action: 'Paletizar', icon: Layers, step: 0 },
   etiquetas: { label: 'Etiquetas por emitir', action: 'Emitir etiquetas', icon: Tag, step: 1 },
   desadv: { label: 'Ficheiro por gerar', action: 'Gerar ficheiro', icon: Send, step: 2 },
-  concluida: { label: 'Concluídas', action: 'Ver', icon: CheckCircle2, step: 3 },
+  enviada: { label: 'A aguardar entrega', action: 'Ver encomenda', icon: Truck, step: 3 },
+  concluida: { label: 'Entregues', action: 'Ver', icon: CheckCircle2, step: 3 },
 };
 
-function stageFor(status: string, hasDesadv: boolean): Stage {
-  if (hasDesadv) return 'concluida';
+function stageFor(status: string, hasDesadv: boolean, isDelivered: boolean): Stage {
+  if (isDelivered) return 'concluida';
+  if (hasDesadv) return 'enviada';
   if (status === 'etiquetas_geradas') return 'desadv';
   if (status === 'paletizado') return 'etiquetas';
   return 'paletizar';
@@ -55,7 +57,7 @@ function greeting(): string {
 
 function orderLink(order: DashboardOrder): string {
   if (order.stage === 'paletizar') return `/orders/${order.id}`;
-  if (order.stage === 'concluida') return `/orders/${order.id}`;
+  if (order.stage === 'concluida' || order.stage === 'enviada') return `/orders/${order.id}`;
   return `/labels?order=${order.id}`;
 }
 
@@ -90,26 +92,19 @@ export default function DashboardPage() {
             .from('operation_history')
             .select('entity_id, action, created_at')
             .eq('entity_type', 'order')
-            .in('action', ['desadv_generated', 'desadv_regenerated', 'order_reopened']),
+            .in('action', ['desadv_generated', 'desadv_regenerated', 'order_delivered']),
           supabase.from('warehouse_addresses').select('warehouse_code, warehouse_name'),
         ]);
         if (ordersRes.error) throw ordersRes.error;
         if (historyRes.error) throw historyRes.error;
 
         const rawOrders = ordersRes.data ?? [];
-        // Concluída = ficheiro gerado depois da última reabertura (mesma regra da base de dados).
-        const lastDesadv = new Map<string, string>();
-        const lastReopen = new Map<string, string>();
+        const desadvIds = new Set<string>();
+        const deliveredIds = new Set<string>();
         for (const row of historyRes.data ?? []) {
-          const target = row.action === 'order_reopened' ? lastReopen : lastDesadv;
-          const previous = target.get(row.entity_id);
-          if (!previous || row.created_at > previous) target.set(row.entity_id, row.created_at);
+          if (row.action === 'order_delivered') deliveredIds.add(row.entity_id);
+          else desadvIds.add(row.entity_id);
         }
-        const desadvIds = new Set(
-          [...lastDesadv.entries()]
-            .filter(([id, at]) => !lastReopen.has(id) || at > lastReopen.get(id)!)
-            .map(([id]) => id),
-        );
         const warehouseNames = new Map(
           (warehousesRes.data ?? []).map((w) => [String(w.warehouse_code), String(w.warehouse_name)]),
         );
@@ -142,7 +137,7 @@ export default function DashboardPage() {
             status: o.status,
             delivery_date: o.delivery_date,
             created_at: o.created_at,
-            stage: stageFor(o.status, desadvIds.has(o.id)),
+            stage: stageFor(o.status, desadvIds.has(o.id), deliveredIds.has(o.id)),
             boxes: stats?.boxes ?? 0,
             stores: stats?.stores.size ?? 0,
             warehouse: warehouseShortName(warehouseNames.get(code), code),
@@ -159,7 +154,7 @@ export default function DashboardPage() {
   }, []);
 
   const counts = useMemo(() => {
-    const result: Record<Stage, number> = { paletizar: 0, etiquetas: 0, desadv: 0, concluida: 0 };
+    const result: Record<Stage, number> = { paletizar: 0, etiquetas: 0, desadv: 0, enviada: 0, concluida: 0 };
     for (const order of orders) result[order.stage]++;
     return result;
   }, [orders]);
@@ -190,7 +185,7 @@ export default function DashboardPage() {
       ) : (
         <div className="space-y-8">
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-            {(Object.keys(stageInfo) as Stage[]).map((stage) => {
+            {(['paletizar', 'etiquetas', 'desadv', 'enviada'] as Stage[]).map((stage) => {
               const info = stageInfo[stage];
               return (
                 <div key={stage} className="rounded-lg border border-border bg-card p-4">
@@ -254,7 +249,7 @@ export default function DashboardPage() {
 
           {recentDone.length > 0 && (
             <section>
-              <h2 className="mb-3 text-base font-semibold text-foreground">Concluídas recentemente</h2>
+              <h2 className="mb-3 text-base font-semibold text-foreground">Entregues recentemente</h2>
               <div className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-card">
                 {recentDone.map((order) => (
                   <Link
@@ -265,7 +260,7 @@ export default function DashboardPage() {
                     <span className="font-medium text-foreground">{order.order_number}</span>
                     <span className="text-muted-foreground">{order.warehouse}</span>
                     <span className="flex items-center gap-1.5 text-emerald-600">
-                      <CheckCircle2 className="h-4 w-4" /> Ficheiro gerado
+                      <CheckCircle2 className="h-4 w-4" /> Entregue
                     </span>
                   </Link>
                 ))}

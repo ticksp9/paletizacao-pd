@@ -752,7 +752,7 @@ Deno.serve(async (req) => {
     }
     const performedBy = authenticatedUser.user.id;
 
-    // DESADV is immutable; issued labels require an explicit force confirmation.
+    // Depois do ficheiro só o administrador altera; etiquetas emitidas exigem confirmação.
     const { data: currentOrder, error: orderError } = await supabase
       .from("orders")
       .select("status")
@@ -761,25 +761,24 @@ Deno.serve(async (req) => {
     if (orderError || !currentOrder) {
       throw new Error(`Falha a verificar a encomenda: ${orderError?.message || order_id}`);
     }
-    const [issuedLabels, desadvLock] = await Promise.all([
+    const [issuedLabels, changeBlock] = await Promise.all([
       supabase.from("labels").select("id", { count: "exact", head: true }).eq("order_id", order_id),
-      // Bloqueada se houver ficheiro DESADV gerado depois da última reabertura.
-      supabase.rpc("order_desadv_locked", { p_order_id: order_id }),
+      // Regra de alteração: entregue = fechada; ficheiro já gerado = só administrador.
+      supabase.rpc("order_change_block_reason", { p_order_id: order_id, p_actor_user_id: performedBy }),
     ]);
-    if (issuedLabels.error || desadvLock.error ||
-      issuedLabels.count == null || typeof desadvLock.data !== "boolean") {
+    if (issuedLabels.error || changeBlock.error || issuedLabels.count == null) {
       throw new Error(
-        `Falha a verificar emissões anteriores: ${issuedLabels.error?.message || desadvLock.error?.message || "contagem indisponível"}`,
+        `Falha a verificar emissões anteriores: ${issuedLabels.error?.message || changeBlock.error?.message || "contagem indisponível"}`,
       );
     }
-    if (desadvLock.data) {
+    if (changeBlock.data) {
       return new Response(
         JSON.stringify({
           success: false,
-          error: "Esta encomenda já tem o ficheiro gerado. Para refazer paletes, etiquetas e ficheiro, um administrador tem de reabrir a encomenda.",
+          error: changeBlock.data,
           desadv_blocked: true,
           permanent_block: true,
-          code: "DESADV_ALREADY_GENERATED",
+          code: "ORDER_CHANGE_BLOCKED",
         }),
         { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );

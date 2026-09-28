@@ -91,13 +91,16 @@ export default function PalletizationPage() {
   const { orderId } = useParams<{ orderId: string }>();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showForceDialog, setShowForceDialog] = useState(false);
   const [showReleaseDialog, setShowReleaseDialog] = useState(false);
   const [releaseReason, setReleaseReason] = useState('');
-  const [reopenReason, setReopenReason] = useState('');
-  const [isReopening, setIsReopening] = useState(false);
+  const [fileIssued, setFileIssued] = useState(false);
+  const [delivered, setDelivered] = useState(false);
+  const [deliveryNote, setDeliveryNote] = useState('');
+  const [isMarkingDelivered, setIsMarkingDelivered] = useState(false);
+  const [showDeliveredDialog, setShowDeliveredDialog] = useState(false);
   const [isReleasingReservation, setIsReleasingReservation] = useState(false);
   const [buildBlockMessage, setBuildBlockMessage] = useState('');
   const [desadvReadOnly, setDesadvReadOnly] = useState(false);
@@ -175,11 +178,18 @@ export default function PalletizationPage() {
       const [orderRes, linesRes, historyRes] = await Promise.all([
         supabase.from('orders').select('*').eq('id', orderId).single(),
         supabase.from('order_lines').select('*').eq('order_id', orderId).order('line_number'),
-        // Bloqueada se houver ficheiro gerado depois da última reabertura.
-        supabase.rpc('order_desadv_locked', { p_order_id: orderId }),
+        // Entregue = fechada; ficheiro já gerado = só administrador altera.
+        supabase.rpc('order_change_block_reason', { p_order_id: orderId, p_actor_user_id: user?.id ?? null }),
       ]);
+      const [fileIssuedRes, deliveredRes] = await Promise.all([
+        supabase.rpc('order_file_issued', { p_order_id: orderId }),
+        supabase.rpc('order_is_delivered', { p_order_id: orderId }),
+      ]);
+      setFileIssued(fileIssuedRes.data === true);
+      setDelivered(deliveredRes.data === true);
 
-      const hasDesadvHistory = historyRes.data === true;
+      const blockReason = typeof historyRes.data === 'string' ? historyRes.data : null;
+      const hasDesadvHistory = !!blockReason;
       if (historyRes.error) {
         const message = `Não foi possível verificar se o ficheiro já foi gerado. A paletização fica bloqueada para alterações: ${historyRes.error.message}`;
         setDesadvHistoryStatus('error');
@@ -190,7 +200,7 @@ export default function PalletizationPage() {
         setDesadvHistoryStatus('blocked');
         setDesadvHistoryError('');
         setDesadvReadOnly(true);
-        setBuildBlockMessage('Esta encomenda já tem o ficheiro gerado. As paletes, os SOC e as etiquetas estão só para consulta. Para os refazer, um administrador tem de reabrir a encomenda.');
+        setBuildBlockMessage(blockReason ?? '');
       } else {
         setDesadvHistoryStatus('clear');
         setDesadvHistoryError('');
@@ -268,29 +278,27 @@ export default function PalletizationPage() {
     }
   };
 
-  const reopenOrder = async () => {
-    if (!order || reopenReason.trim().length < 10) return;
-    setIsReopening(true);
+  const markDelivered = async () => {
+    if (!order) return;
+    setIsMarkingDelivered(true);
     try {
-      const { error } = await supabase.rpc('reopen_order_for_replan', {
+      const { error } = await supabase.rpc('mark_order_delivered', {
         p_order_id: order.id,
-        p_reason: reopenReason.trim(),
+        p_note: deliveryNote.trim() || null,
       });
       if (error) throw new Error(error.message);
-      toast({
-        title: 'Encomenda reaberta',
-        description: 'Já pode refazer as paletes, as etiquetas e o ficheiro.',
-      });
-      setReopenReason('');
+      toast({ title: 'Encomenda marcada como entregue', description: 'Já não pode ser alterada.' });
+      setShowDeliveredDialog(false);
+      setDeliveryNote('');
       await fetchOrderData();
     } catch (error) {
       toast({
-        title: 'Não foi possível reabrir',
+        title: 'Não foi possível marcar como entregue',
         description: error instanceof Error ? error.message : 'Erro desconhecido.',
         variant: 'destructive',
       });
     } finally {
-      setIsReopening(false);
+      setIsMarkingDelivered(false);
     }
   };
 
@@ -298,14 +306,17 @@ export default function PalletizationPage() {
     setDesadvHistoryStatus('checking');
     setDesadvHistoryError('');
     try {
-      const { data, error } = await supabase.rpc('order_desadv_locked', { p_order_id: checkedOrderId });
+      const { data, error } = await supabase.rpc('order_change_block_reason', {
+        p_order_id: checkedOrderId,
+        p_actor_user_id: user?.id ?? null,
+      });
 
       if (error) throw new Error(error.message);
-      if (data === true) {
+      if (typeof data === 'string' && data) {
         setDesadvHistoryStatus('blocked');
         setDesadvHistoryError('');
         setDesadvReadOnly(true);
-        setBuildBlockMessage('Esta encomenda já tem o ficheiro gerado. As paletes, os SOC e as etiquetas estão só para consulta. Para os refazer, um administrador tem de reabrir a encomenda.');
+        setBuildBlockMessage(data);
         const savedPlans = await loadExistingPlans(checkedOrderId);
         setCurrentStep(savedPlans.length > 0 ? 4 : 2);
         return false;
@@ -799,39 +810,51 @@ export default function PalletizationPage() {
         </details>
       )}
 
+      {isAdmin && fileIssued && !delivered && order && (
+        <div className="mb-6 flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm sm:flex-row sm:items-center sm:justify-between" role="status">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+            <p className="text-amber-900">
+              O ficheiro desta encomenda já foi gerado. Como administrador, pode refazer paletes, etiquetas e ficheiro
+              até marcar a encomenda como entregue.
+            </p>
+          </div>
+          <IndustrialButton size="sm" variant="outline" onClick={() => setShowDeliveredDialog(true)} icon={<CheckCircle2 className="h-4 w-4" />}>
+            Marcar como entregue
+          </IndustrialButton>
+        </div>
+      )}
+
+      <Dialog open={showDeliveredDialog} onOpenChange={setShowDeliveredDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Marcar como entregue</DialogTitle>
+            <DialogDescription>
+              Confirme que a encomenda {order?.order_number} foi entregue e aceite pelo Pingo Doce. Depois disto, as paletes,
+              as etiquetas e o ficheiro deixam de poder ser alterados.
+            </DialogDescription>
+          </DialogHeader>
+          <textarea
+            className="min-h-16 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            value={deliveryNote}
+            onChange={(event) => setDeliveryNote(event.target.value)}
+            placeholder="Nota opcional (ex.: entregue em Alcochete a 30/09)"
+            maxLength={500}
+          />
+          <DialogFooter>
+            <IndustrialButton variant="ghost" onClick={() => setShowDeliveredDialog(false)}>Cancelar</IndustrialButton>
+            <IndustrialButton variant="primary" onClick={() => void markDelivered()} isLoading={isMarkingDelivered}>
+              Confirmar entrega
+            </IndustrialButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {buildBlockMessage && (
         <div className="mb-6 flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm" role="alert">
           <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
           <div className="flex-1">
             <p>{buildBlockMessage}</p>
-            {desadvHistoryStatus === 'blocked' && order && isAdmin && (
-              <div className="mt-3 space-y-2">
-                <label className="block text-sm font-medium" htmlFor="reopen-reason">
-                  Reabrir encomenda (só administradores)
-                </label>
-                <textarea
-                  id="reopen-reason"
-                  className="min-h-16 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  value={reopenReason}
-                  onChange={(event) => setReopenReason(event.target.value)}
-                  placeholder="Motivo (mínimo 10 caracteres), ex.: teste de envio ao Pingo Doce"
-                  maxLength={500}
-                />
-                <IndustrialButton
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void reopenOrder()}
-                  isLoading={isReopening}
-                  disabled={reopenReason.trim().length < 10}
-                  icon={<RotateCcw className="h-4 w-4" />}
-                >
-                  Reabrir encomenda
-                </IndustrialButton>
-                <p className="text-xs text-muted-foreground">
-                  Fica registado no histórico. Ao gerar de novo o ficheiro, a encomenda volta a ficar bloqueada.
-                </p>
-              </div>
-            )}
             {desadvHistoryStatus === 'error' && order && (
               <IndustrialButton
                 className="mt-3"

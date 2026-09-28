@@ -1,37 +1,68 @@
--- Reabrir uma encomenda depois do ficheiro DESADV (pedido do utilizador em 2026-09-28:
--- "devia ter a possibilidade de refazer e atualizar as etiquetas e ficheiros").
+-- Regra de alteração das encomendas (pedido do utilizador em 2026-09-28):
+--   "o administrador pode e deve poder atualizar os ficheiros até dizer que a encomenda
+--    foi entregue com sucesso. Mas só administrador pode fazer."
 --
--- Regra única de bloqueio: uma encomenda está bloqueada se existir um ficheiro DESADV
--- (desadv_generated ou desadv_regenerated) gerado DEPOIS da última reabertura
--- (order_reopened). Um administrador pode reabrir, com motivo registado no histórico;
--- ao gerar de novo o ficheiro, a encomenda volta a ficar bloqueada.
+--   * Antes do ficheiro DESADV: administrador e operador paletizam e emitem (como antes).
+--   * Depois do ficheiro: só o administrador pode refazer paletes, etiquetas e ficheiro.
+--   * Depois de "Marcar como entregue" (só administrador): fechada para todos.
+-- A regra vive em order_change_block_reason e é aplicada na base de dados (substituição do
+-- plano e finalização de etiquetas/ficheiro), não só no ecrã.
 
-CREATE OR REPLACE FUNCTION public.order_desadv_locked(p_order_id uuid)
+CREATE OR REPLACE FUNCTION public.order_file_issued(p_order_id uuid)
 RETURNS boolean
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
+LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $$
   SELECT EXISTS (
     SELECT 1 FROM public.operation_history h
     WHERE h.entity_type = 'order' AND h.entity_id = p_order_id
       AND h.action IN ('desadv_generated', 'desadv_regenerated')
-      AND h.created_at > coalesce((
-        SELECT max(r.created_at) FROM public.operation_history r
-        WHERE r.entity_type = 'order' AND r.entity_id = p_order_id
-          AND r.action = 'order_reopened'
-      ), '-infinity'::timestamptz)
   );
 $$;
 
-REVOKE ALL ON FUNCTION public.order_desadv_locked(uuid) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.order_desadv_locked(uuid) TO authenticated, service_role;
+CREATE OR REPLACE FUNCTION public.order_is_delivered(p_order_id uuid)
+RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.operation_history h
+    WHERE h.entity_type = 'order' AND h.entity_id = p_order_id
+      AND h.action = 'order_delivered'
+  );
+$$;
 
-CREATE OR REPLACE FUNCTION public.reopen_order_for_replan(p_order_id uuid, p_reason text)
+-- NULL = pode alterar; texto = motivo do bloqueio (mostrado ao utilizador).
+CREATE OR REPLACE FUNCTION public.order_change_block_reason(p_order_id uuid, p_actor_user_id uuid)
+RETURNS text
+LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF public.order_is_delivered(p_order_id) THEN
+    RETURN 'Esta encomenda já foi marcada como entregue e não pode ser alterada.';
+  END IF;
+  IF public.order_file_issued(p_order_id) AND (
+       p_actor_user_id IS NULL OR NOT EXISTS (
+         SELECT 1 FROM public.user_roles ur WHERE ur.user_id = p_actor_user_id AND ur.role = 'admin'
+       )
+     ) THEN
+    RETURN 'O ficheiro desta encomenda já foi gerado. Só um administrador pode refazer paletes, etiquetas e ficheiro.';
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.order_file_issued(uuid) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.order_is_delivered(uuid) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.order_change_block_reason(uuid, uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.order_file_issued(uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.order_is_delivered(uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.order_change_block_reason(uuid, uuid) TO authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.mark_order_delivered(p_order_id uuid, p_note text DEFAULT NULL)
 RETURNS jsonb
-LANGUAGE plpgsql
-SECURITY DEFINER
+LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $$
 DECLARE
@@ -39,30 +70,25 @@ DECLARE
   v_order_number text;
 BEGIN
   IF v_actor IS NULL OR NOT private.has_role(v_actor, 'admin'::public.app_role) THEN
-    RAISE EXCEPTION 'Só um administrador pode reabrir uma encomenda.';
+    RAISE EXCEPTION 'Só um administrador pode marcar a encomenda como entregue.';
   END IF;
-  IF p_order_id IS NULL OR NULLIF(btrim(p_reason), '') IS NULL OR length(btrim(p_reason)) < 10 THEN
-    RAISE EXCEPTION 'Indique o motivo da reabertura (pelo menos 10 caracteres).';
-  END IF;
-
-  SELECT o.order_number INTO v_order_number
-  FROM public.orders o WHERE o.id = p_order_id FOR UPDATE;
+  SELECT o.order_number INTO v_order_number FROM public.orders o WHERE o.id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Encomenda não encontrada.'; END IF;
-
-  IF NOT public.order_desadv_locked(p_order_id) THEN
-    RAISE EXCEPTION 'Esta encomenda não está bloqueada; não é preciso reabrir.';
+  IF NOT public.order_file_issued(p_order_id) THEN
+    RAISE EXCEPTION 'Gere o ficheiro antes de marcar a encomenda como entregue.';
   END IF;
-
+  IF public.order_is_delivered(p_order_id) THEN
+    RAISE EXCEPTION 'Esta encomenda já está marcada como entregue.';
+  END IF;
   INSERT INTO public.operation_history (entity_type, entity_id, action, performed_by, details)
-  VALUES ('order', p_order_id, 'order_reopened', v_actor,
-          jsonb_build_object('reason', btrim(p_reason), 'order_number', v_order_number));
-
-  RETURN jsonb_build_object('status', 'reopened', 'order_id', p_order_id);
+  VALUES ('order', p_order_id, 'order_delivered', v_actor,
+          jsonb_build_object('order_number', v_order_number, 'note', NULLIF(btrim(coalesce(p_note, '')), '')));
+  RETURN jsonb_build_object('status', 'delivered', 'order_id', p_order_id);
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.reopen_order_for_replan(uuid, text) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.reopen_order_for_replan(uuid, text) TO authenticated, service_role;
+REVOKE ALL ON FUNCTION public.mark_order_delivered(uuid, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.mark_order_delivered(uuid, text) TO authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION public.replace_pallet_plan_atomic(
   p_order_id uuid,
@@ -105,6 +131,7 @@ DECLARE
   v_results jsonb := '[]'::jsonb;
   v_containers jsonb;
   v_box_socs jsonb;
+  v_block text;
   v_store_first_soc text;
   v_boxord record;
   v_item record;
@@ -123,12 +150,13 @@ BEGIN
   SELECT EXISTS (SELECT 1 FROM public.labels l WHERE l.order_id = p_order_id)
          OR v_status = 'etiquetas_geradas'
   INTO v_has_labels;
-  -- Bloqueada se houver ficheiro DESADV gerado depois da última reabertura.
-  v_has_desadv := public.order_desadv_locked(p_order_id);
+  v_has_desadv := public.order_file_issued(p_order_id);
 
-  -- A DESADV is an irreversible issuance record. Reservations also always
-  -- block replacement, including a forced replacement.
-  IF v_has_desadv THEN RAISE EXCEPTION 'A recorded DESADV prevents pallet-plan replacement'; END IF;
+  -- Regra de alteração: entregue = fechada; ficheiro já gerado = só administrador.
+  v_block := public.order_change_block_reason(p_order_id, p_actor_user_id);
+  IF v_block IS NOT NULL THEN RAISE EXCEPTION '%', v_block; END IF;
+
+  -- Reservas ativas bloqueiam sempre a substituição, mesmo forçada.
   IF EXISTS (
     SELECT 1 FROM public.pallet_plan_issuance_reservations r
     WHERE r.order_id = p_order_id
@@ -535,6 +563,193 @@ REVOKE ALL ON FUNCTION public.replace_pallet_plan_atomic(uuid, jsonb, boolean, u
 GRANT EXECUTE ON FUNCTION public.replace_pallet_plan_atomic(uuid, jsonb, boolean, uuid)
   TO service_role;
 
+CREATE OR REPLACE FUNCTION public.finalize_label_issuance(
+  p_order_id uuid,
+  p_token uuid,
+  p_label_type text,
+  p_storage_path text,
+  p_label_data jsonb,
+  p_actor_user_id uuid
+) RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  v_token uuid;
+  v_label_id uuid;
+  v_order_path_prefix text;
+  v_block text;
+BEGIN
+  IF p_order_id IS NULL OR p_token IS NULL THEN
+    RAISE EXCEPTION 'Order id and issuance token are required';
+  END IF;
+
+  PERFORM 1 FROM public.orders o WHERE o.id = p_order_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Order % does not exist', p_order_id; END IF;
+
+  SELECT r.token INTO v_token
+  FROM public.pallet_plan_issuance_reservations r
+  WHERE r.order_id = p_order_id
+  FOR UPDATE;
+  IF NOT FOUND OR v_token IS DISTINCT FROM p_token THEN
+    RAISE EXCEPTION 'Issuance reservation token does not match order %', p_order_id;
+  END IF;
+
+  IF p_actor_user_id IS NULL OR p_label_type IS NULL
+     OR p_label_type NOT IN ('pallet', 'zpl') OR p_storage_path IS NULL THEN
+    RAISE EXCEPTION 'Order, token, supported label type, storage path, and actor are required';
+  END IF;
+
+  v_order_path_prefix := p_order_id::text || '/';
+  IF left(p_storage_path, length(v_order_path_prefix)) <> v_order_path_prefix
+     OR length(p_storage_path) <= length(v_order_path_prefix) THEN
+    RAISE EXCEPTION 'Label storage path must be scoped to order %', p_order_id;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = p_actor_user_id
+      AND ur.role IN ('admin', 'operador', 'etiquetas')
+  ) THEN
+    RAISE EXCEPTION 'Label actor must have an active label-generation role';
+  END IF;
+
+  -- Regra de alteração: entregue = fechada; ficheiro já gerado = só administrador.
+  v_block := public.order_change_block_reason(p_order_id, p_actor_user_id);
+  IF v_block IS NOT NULL THEN RAISE EXCEPTION '%', v_block; END IF;
+
+
+  INSERT INTO public.labels (
+    order_id, label_type, label_data, pdf_storage_path, generated_by
+  ) VALUES (
+    p_order_id, p_label_type, p_label_data, p_storage_path, p_actor_user_id
+  )
+  RETURNING id INTO v_label_id;
+
+  UPDATE public.orders
+  SET status = 'etiquetas_geradas'
+  WHERE id = p_order_id;
+
+  DELETE FROM public.pallet_plan_issuance_reservations
+  WHERE order_id = p_order_id AND token = p_token;
+  RETURN jsonb_build_object('label_id', v_label_id);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.finalize_label_issuance(uuid, uuid, text, text, jsonb, uuid)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.finalize_label_issuance(uuid, uuid, text, text, jsonb, uuid)
+  TO service_role;
+
+CREATE OR REPLACE FUNCTION public.finalize_desadv_issuance(
+  p_order_id uuid,
+  p_token uuid,
+  p_actor_user_id uuid,
+  p_transport_guide text,
+  p_delivery_date date,
+  p_storage_path text,
+  p_filename text,
+  p_count_dg integer,
+  p_count_dl integer
+) RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  v_token uuid;
+  v_history_id uuid;
+  v_order_path_prefix text;
+  v_order_number text;
+  v_has_prior_desadv boolean;
+  v_history_action text;
+  v_block text;
+BEGIN
+  IF p_order_id IS NULL OR p_token IS NULL THEN
+    RAISE EXCEPTION 'Order id and issuance token are required';
+  END IF;
+
+  SELECT o.order_number INTO v_order_number
+  FROM public.orders o WHERE o.id = p_order_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Order % does not exist', p_order_id; END IF;
+
+  SELECT r.token INTO v_token
+  FROM public.pallet_plan_issuance_reservations r
+  WHERE r.order_id = p_order_id
+  FOR UPDATE;
+  IF NOT FOUND OR v_token IS DISTINCT FROM p_token THEN
+    RAISE EXCEPTION 'Issuance reservation token does not match order %', p_order_id;
+  END IF;
+
+  IF p_actor_user_id IS NULL
+     OR NULLIF(btrim(p_transport_guide), '') IS NULL
+     OR p_delivery_date IS NULL
+     OR NULLIF(btrim(p_storage_path), '') IS NULL
+     OR NULLIF(btrim(p_filename), '') IS NULL
+     OR p_count_dg IS NULL OR p_count_dg < 0
+     OR p_count_dl IS NULL OR p_count_dl < 0 THEN
+    RAISE EXCEPTION 'Order, token, actor, transport guide, delivery date, storage path, filename, and nonnegative counts are required';
+  END IF;
+
+  v_order_path_prefix := p_order_id::text || '/';
+  IF left(p_storage_path, length(v_order_path_prefix)) <> v_order_path_prefix
+     OR length(p_storage_path) <= length(v_order_path_prefix) THEN
+    RAISE EXCEPTION 'DESADV storage path must be scoped to order %', p_order_id;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = p_actor_user_id AND ur.role IN ('admin', 'operador')
+  ) THEN
+    RAISE EXCEPTION 'DESADV actor must have an admin or operator role';
+  END IF;
+
+  -- Regra de alteração: entregue = fechada; ficheiro já gerado = só administrador.
+  v_block := public.order_change_block_reason(p_order_id, p_actor_user_id);
+  IF v_block IS NOT NULL THEN RAISE EXCEPTION '%', v_block; END IF;
+
+
+  SELECT EXISTS (
+    SELECT 1 FROM public.operation_history h
+    WHERE h.entity_type = 'order' AND h.entity_id = p_order_id
+      AND h.action = 'desadv_generated'
+  ) INTO v_has_prior_desadv;
+  v_history_action := CASE
+    WHEN v_has_prior_desadv THEN 'desadv_regenerated'
+    ELSE 'desadv_generated'
+  END;
+
+  UPDATE public.orders
+  SET transport_guide = p_transport_guide,
+      delivery_date = p_delivery_date
+  WHERE id = p_order_id;
+
+  INSERT INTO public.operation_history (
+    entity_type, entity_id, action, performed_by, details
+  ) VALUES (
+    'order', p_order_id, v_history_action, p_actor_user_id,
+    jsonb_build_object(
+      'storage_path', p_storage_path,
+      'filename', p_filename,
+      'transport_guide', p_transport_guide,
+      'delivery_date', p_delivery_date,
+      'order_number', v_order_number,
+      'count_dg', p_count_dg,
+      'count_dl', p_count_dl
+    )
+  )
+  RETURNING id INTO v_history_id;
+
+  DELETE FROM public.pallet_plan_issuance_reservations
+  WHERE order_id = p_order_id AND token = p_token;
+  RETURN jsonb_build_object('history_id', v_history_id);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.finalize_desadv_issuance(uuid, uuid, uuid, text, date, text, text, integer, integer)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.finalize_desadv_issuance(uuid, uuid, uuid, text, date, text, text, integer, integer)
+  TO service_role;
+
 CREATE OR REPLACE FUNCTION public.release_plan_issuance_admin(
   p_order_id uuid,
   p_actor_user_id uuid,
@@ -563,8 +778,8 @@ BEGIN
   PERFORM 1 FROM public.orders o WHERE o.id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Order % does not exist', p_order_id; END IF;
 
-  IF public.order_desadv_locked(p_order_id) THEN
-    RAISE EXCEPTION 'A recorded DESADV prevents reservation release';
+  IF public.order_is_delivered(p_order_id) THEN
+    RAISE EXCEPTION 'Encomenda entregue: não é possível libertar a reserva.';
   END IF;
 
   SELECT r.token, r.reserved_at

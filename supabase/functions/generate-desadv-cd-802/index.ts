@@ -414,6 +414,19 @@ Deno.serve(async (req) => {
     // Reserve before reading the order/plan or mutating delivery data. A
     // reservation remains until finalization or the next issuer replaces it
     // after ten minutes. Never release an uncertain issuance here.
+    // Regra de alteração: entregue = fechada; ficheiro já gerado = só administrador.
+    const { data: changeBlock, error: changeBlockError } = await supabase
+      .rpc("order_change_block_reason", { p_order_id: order_id, p_actor_user_id: performedBy });
+    if (changeBlockError) {
+      throw new Error(`Falha a verificar se a encomenda pode ser alterada: ${changeBlockError.message}`);
+    }
+    if (changeBlock) {
+      return new Response(
+        JSON.stringify({ success: false, error: changeBlock, code: "ORDER_CHANGE_BLOCKED" }),
+        { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
     const { data: reservationToken, error: reservationError } = await supabase
       .rpc("reserve_plan_issuance", { p_order_id: order_id });
     if (reservationError || !reservationToken) {

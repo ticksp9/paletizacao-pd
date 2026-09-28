@@ -356,6 +356,19 @@ if (import.meta.main) Deno.serve(async (req) => {
 
     // Freeze the plan before reading it or publishing any labels. Completion
     // releases the reservation only after label output and persistence succeed.
+    // Regra de alteração: entregue = fechada; ficheiro já gerado = só administrador.
+    const { data: changeBlock, error: changeBlockError } = await supabase
+      .rpc("order_change_block_reason", { p_order_id: order_id, p_actor_user_id: actorUserId });
+    if (changeBlockError) {
+      throw new Error(`Falha a verificar se a encomenda pode ser alterada: ${changeBlockError.message}`);
+    }
+    if (changeBlock) {
+      return new Response(
+        JSON.stringify({ success: false, error: changeBlock, code: "ORDER_CHANGE_BLOCKED" }),
+        { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
     const { data: reservationToken, error: reservationError } = await supabase
       .rpc("reserve_plan_issuance", { p_order_id: order_id });
     if (reservationError || !reservationToken) {
