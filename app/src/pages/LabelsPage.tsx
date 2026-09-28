@@ -774,7 +774,7 @@ export default function LabelsPage() {
   const handlePickingSheet = async (
     order: OrderWithLgs,
     mode: 'view' | 'print',
-    sheetMode: 'per_lg' | 'single_page' = 'per_lg',
+    sheetMode: 'per_lg' | 'single_page' | 'soc' = 'per_lg',
   ) => {
     const key = actionKey(order.id, 'picking');
     setBusyAction(key);
@@ -969,6 +969,15 @@ export default function LabelsPage() {
                         </IndustrialButton>
                       </>
                     )}
+                    <IndustrialButton
+                      variant="ghost"
+                      onClick={() => handlePickingSheet(order, 'view', 'soc')}
+                      isLoading={isBusy(order.id, 'picking')}
+                      icon={<Boxes className="w-5 h-5" />}
+                      title="Uma linha por caixa: SOC, loja, LG, artigo e quantidade"
+                    >
+                      Lista de caixas (SOC)
+                    </IndustrialButton>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <IndustrialButton
@@ -980,6 +989,9 @@ export default function LabelsPage() {
                         </IndustrialButton>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => handlePickingSheet(order, 'print', 'soc')}>
+                          <Printer className="w-4 h-4 mr-2" /> Imprimir lista de caixas (SOC)
+                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => handlePickingSheet(order, 'view', 'per_lg')}>
                           <Eye className="w-4 h-4 mr-2" /> Ver PDF (por LG)
                         </DropdownMenuItem>

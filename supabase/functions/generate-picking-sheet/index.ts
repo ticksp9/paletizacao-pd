@@ -55,7 +55,8 @@ Deno.serve(async (req) => {
     if (authResponse) return authResponse;
 
     const { order_id, mode: rawMode } = await req.json();
-    const sheetMode: "per_lg" | "single_page" = rawMode === "single_page" ? "single_page" : "per_lg";
+    const sheetMode: "per_lg" | "single_page" | "soc" =
+      rawMode === "single_page" ? "single_page" : rawMode === "soc" ? "soc" : "per_lg";
     if (!order_id || typeof order_id !== "string") {
       return new Response(JSON.stringify({ success: false, error: "order_id em falta." }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -186,6 +187,208 @@ Deno.serve(async (req) => {
         boxes,
         units,
       });
+    }
+
+    // ── LISTA DE CAIXAS (SOC) ──
+    // Uma linha por caixa, pela ordem das etiquetas (palete, LG decrescente, loja, SOC), para
+    // saber que artigo e que quantidade vão dentro de cada caixa/etiqueta.
+    if (sheetMode === "soc") {
+      const { data: plans, error: plansErr } = await supabase
+        .from("palletization_plans")
+        .select("id, pallet_number, soc_code")
+        .eq("order_id", order_id)
+        .order("pallet_number", { ascending: true });
+      if (plansErr) throw new Error(plansErr.message);
+      if (!plans || plans.length === 0) {
+        return new Response(JSON.stringify({ success: false, error: "A encomenda ainda não tem paletes. Paletize primeiro." }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      const planIds = plans.map((p) => p.id);
+      const palletNumberByPlan = new Map(plans.map((p) => [p.id, Number(p.pallet_number)]));
+      const planSocByPlan = new Map(plans.map((p) => [p.id, String(p.soc_code || "").trim()]));
+
+      const { data: items, error: itemsErr } = await supabase
+        .from("pallet_items")
+        .select("id, palletization_plan_id, order_line_id, store_code, lg_code, article_code, soc_code, layer_number, placement_sequence")
+        .in("palletization_plan_id", planIds);
+      if (itemsErr) throw new Error(itemsErr.message);
+      const { data: containers } = await supabase
+        .from("pallet_store_containers")
+        .select("palletization_plan_id, store_code, soc_code")
+        .in("palletization_plan_id", planIds);
+      const containerSoc = new Map(
+        (containers || []).map((c) => [`${c.palletization_plan_id}|${String(c.store_code).trim()}`, String(c.soc_code || "").trim()]),
+      );
+
+      const { data: fullLines, error: fullLinesErr } = await supabase
+        .from("order_lines")
+        .select("id, article_code, article_description, store_code, lg_code, warehouse_code, quantity, quantity_cases")
+        .eq("order_id", order_id);
+      if (fullLinesErr) throw new Error(fullLinesErr.message);
+      const lineById = new Map((fullLines || []).map((l) => [l.id, l]));
+
+      interface BoxRow {
+        pallet: number; soc: string; store: string; storeName: string; lg: string;
+        ean: string; description: string; qty: number; lineId: string;
+      }
+      const boxes: BoxRow[] = [];
+      let missingSoc = false;
+      for (const it of items || []) {
+        const line = it.order_line_id ? lineById.get(it.order_line_id) : undefined;
+        const store = String(it.store_code || line?.store_code || "").trim();
+        const lg = String(it.lg_code || line?.lg_code || "").trim();
+        const ean = String(it.article_code || line?.article_code || "").trim();
+        const warehouse = String(line?.warehouse_code || "").trim() || orderWarehouse;
+        let soc = String(it.soc_code || "").trim();
+        if (!soc) {
+          soc = containerSoc.get(`${it.palletization_plan_id}|${store}`) || planSocByPlan.get(it.palletization_plan_id) || "";
+          missingSoc = true;
+        }
+        boxes.push({
+          pallet: palletNumberByPlan.get(it.palletization_plan_id) ?? 0,
+          soc,
+          store,
+          storeName: await storeName(warehouse, store, lg),
+          lg,
+          ean,
+          description: String(line?.article_description || artByKey.get(ean)?.description || ""),
+          qty: 0,
+          lineId: String(it.order_line_id || ""),
+        });
+      }
+      if (missingSoc) {
+        warnings.push("Esta encomenda foi paletizada antes da regra 'um SOC por caixa'. Use «Refazer encomenda» para dar um SOC a cada caixa.");
+      }
+
+      // Quantidade em cada caixa: caixas cheias e a última leva o resto (igual ao ficheiro DESADV).
+      const boxesByLine = new Map<string, BoxRow[]>();
+      for (const b of boxes) {
+        if (!boxesByLine.has(b.lineId)) boxesByLine.set(b.lineId, []);
+        boxesByLine.get(b.lineId)!.push(b);
+      }
+      for (const [lineId, lineBoxes] of boxesByLine) {
+        const line = lineById.get(lineId);
+        let remaining = Number(line?.quantity || 0);
+        const ppb = artByKey.get(String(line?.article_code || "").trim())?.pieces_per_box
+          || (line?.quantity_cases ? Math.round(Number(line.quantity) / Number(line.quantity_cases)) : 0)
+          || Math.ceil(remaining / Math.max(1, lineBoxes.length));
+        lineBoxes.sort((a, b) => a.soc.localeCompare(b.soc, "pt", { numeric: true }));
+        lineBoxes.forEach((b, i) => {
+          const q = i === lineBoxes.length - 1 ? remaining : Math.min(ppb, remaining);
+          b.qty = Math.max(0, q);
+          remaining -= b.qty;
+        });
+      }
+
+      const lgNum = (lg: string) => parseInt(lg.replace(/\D/g, ""), 10) || 0;
+      boxes.sort((a, b) =>
+        a.pallet - b.pallet ||
+        lgNum(b.lg) - lgNum(a.lg) ||
+        (parseInt(a.store, 10) || 0) - (parseInt(b.store, 10) || 0) ||
+        a.soc.localeCompare(b.soc, "pt", { numeric: true })
+      );
+
+      const pdfS = await PDFDocument.create();
+      const fS = await pdfS.embedFont(StandardFonts.Helvetica);
+      const bS = await pdfS.embedFont(StandardFonts.HelveticaBold);
+      const mS = await pdfS.embedFont(StandardFonts.Courier);
+      const mbS = await pdfS.embedFont(StandardFonts.CourierBold);
+      const PW = A4_H, PH = A4_W; // horizontal
+      const MG = 28;
+      const usableW = PW - MG * 2;
+      const colW = [0.055, 0.12, 0.055, 0.17, 0.065, 0.12, 0.29, 0.07, 0.055].map((p) => p * usableW);
+      const colLabels = ["Palete", "SOC", "Loja", "Nome da loja", "LG", "Artigo (EAN)", "Descrição", "Qtd. cx", "Conf."];
+      const colAlign: Array<"left" | "right" | "center"> = ["center", "left", "left", "left", "left", "left", "left", "right", "center"];
+      const colX: number[] = [];
+      { let acc = MG; for (const w of colW) { colX.push(acc); acc += w; } }
+      const ROW = 15;
+      const cell = (page: PDFPage, c: number, text: string, y: number, f: PDFFont, s: number, color = rgb(0.1, 0.1, 0.1)) => {
+        const t = fit(f, text, s, colW[c] - 6);
+        const w = f.widthOfTextAtSize(t, s);
+        const x = colAlign[c] === "right" ? colX[c] + colW[c] - 3 - w
+          : colAlign[c] === "center" ? colX[c] + (colW[c] - w) / 2 : colX[c] + 3;
+        page.drawText(t, { x, y, size: s, font: f, color });
+      };
+      const nowS = new Date();
+      const genS = `${String(nowS.getDate()).padStart(2, "0")}/${String(nowS.getMonth() + 1).padStart(2, "0")}/${nowS.getFullYear()} ${String(nowS.getHours()).padStart(2, "0")}:${String(nowS.getMinutes()).padStart(2, "0")}`;
+      const pagesS: PDFPage[] = [];
+      const header = () => {
+        const page = pdfS.addPage([PW, PH]);
+        pagesS.push(page);
+        let y = PH - MG - 12;
+        page.drawText(fit(bS, `LISTA DE CAIXAS E SOC - Encomenda ${sanitize(String(order.order_number || "-"))}`, 14, usableW), { x: MG, y, size: 14, font: bS });
+        y -= 15;
+        page.drawText(fit(fS, `Armazem ${orderWarehouse || "-"} | Entrega: ${order.delivery_date ? fmtDate(order.delivery_date) : "-"} | Guia: ${order.transport_guide || "-"} | ${boxes.length} caixas`, 9, usableW), { x: MG, y, size: 9, font: fS, color: rgb(0.3, 0.3, 0.3) });
+        y -= 20;
+        page.drawRectangle({ x: MG, y: y - 4, width: usableW, height: 15, color: rgb(0.88, 0.9, 0.94) });
+        for (let c = 0; c < colLabels.length; c++) cell(page, c, colLabels[c], y, bS, 8.5);
+        return { page, y: y - ROW - 2 };
+      };
+
+      let { page: pg, y } = header();
+      let shade = false;
+      let i = 0;
+      let totalUnits = 0;
+      while (i < boxes.length) {
+        const groupKey = `${boxes[i].pallet}|${boxes[i].store}`;
+        let gBoxes = 0, gUnits = 0;
+        const first = boxes[i];
+        while (i < boxes.length && `${boxes[i].pallet}|${boxes[i].store}` === groupKey) {
+          const b = boxes[i];
+          if (y < MG + 30) { ({ page: pg, y } = header()); }
+          if (shade) pg.drawRectangle({ x: MG, y: y - 3.5, width: usableW, height: ROW, color: rgb(0.955, 0.962, 0.972) });
+          cell(pg, 0, String(b.pallet), y, mS, 9);
+          cell(pg, 1, b.soc || "SEM SOC", y, mbS, 10, b.soc ? rgb(0, 0, 0) : rgb(0.75, 0.1, 0.1));
+          cell(pg, 2, b.store || "-", y, mS, 9);
+          cell(pg, 3, b.storeName || "-", y, fS, 9);
+          cell(pg, 4, (b.lg || "-").replace(/^LG/i, ""), y, mS, 9);
+          cell(pg, 5, b.ean || "-", y, mS, 9);
+          cell(pg, 6, b.description || "-", y, fS, 9);
+          cell(pg, 7, String(Math.round(b.qty)), y, mbS, 10);
+          // quadrado para marcar na conferência
+          const bx = colX[8] + colW[8] / 2 - 4.5;
+          pg.drawRectangle({ x: bx, y: y - 2, width: 9, height: 9, borderColor: rgb(0.3, 0.3, 0.3), borderWidth: 0.8 });
+          y -= ROW;
+          gBoxes++; gUnits += b.qty;
+          i++;
+        }
+        totalUnits += gUnits;
+        if (y < MG + 30) { ({ page: pg, y } = header()); }
+        pg.drawLine({ start: { x: MG, y: y + ROW - 3 }, end: { x: PW - MG, y: y + ROW - 3 }, thickness: 0.6, color: rgb(0.6, 0.63, 0.7) });
+        pg.drawText(fit(bS, `Palete ${first.pallet} - Loja ${first.store}: ${gBoxes} caixa(s)`, 8.5, colW[3] + colW[4] + colW[5] - 6), {
+          x: colX[3] + 3, y, size: 8.5, font: bS, color: rgb(0, 0.25, 0.55),
+        });
+        cell(pg, 7, String(Math.round(gUnits)), y, mbS, 9, rgb(0, 0.25, 0.55));
+        y -= ROW + 3;
+        shade = !shade;
+      }
+      if (y < MG + 30) { ({ page: pg, y } = header()); }
+      pg.drawRectangle({ x: MG, y: y - 4, width: usableW, height: 16, color: rgb(0.88, 0.93, 0.98) });
+      pg.drawText(`TOTAL: ${boxes.length} caixas`, { x: colX[3] + 3, y, size: 9.5, font: bS });
+      cell(pg, 7, String(Math.round(totalUnits)), y, mbS, 10);
+
+      const totalPagesS = pagesS.length;
+      pagesS.forEach((p, idx) => {
+        p.drawText(fit(fS, `Gerado em ${genS} por ${sanitize(userLabel)} - Pagina ${idx + 1} de ${totalPagesS}`, 8, usableW), { x: MG, y: 14, size: 8, font: fS, color: rgb(0.45, 0.45, 0.45) });
+      });
+
+      const bytesS = await pdfS.save();
+      const pathS = `${order_id}/lista_caixas_soc_${order.order_number}_${Date.now()}.pdf`;
+      const { error: upS } = await supabase.storage.from("exports").upload(pathS, bytesS, { contentType: "application/pdf", upsert: true });
+      if (upS) throw new Error(`Falha ao carregar PDF: ${upS.message}`);
+      const { data: signedS, error: urlS } = await supabase.storage.from("exports").createSignedUrl(pathS, 3600);
+      if (urlS) throw new Error(`Falha ao gerar URL: ${urlS.message}`);
+      return new Response(JSON.stringify({
+        success: true,
+        mode: "soc",
+        pdf_url: signedS.signedUrl,
+        storage_path: pathS,
+        filename: `lista_caixas_soc_${order.order_number}.pdf`,
+        pages: totalPagesS,
+        totals: { boxes: boxes.length, units: totalUnits },
+        warnings,
+      }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     // ── Group by LG ──
