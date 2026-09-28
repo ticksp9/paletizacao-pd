@@ -618,11 +618,17 @@ export default function LabelsPage() {
   const handlePreviewPdf = async (order: OrderWithLgs) => {
     const key = actionKey(order.id, 'preview');
     setBusyAction(key);
+    // Abrir o separador já, no próprio clique: se só abrir depois de esperar pelo servidor,
+    // o browser bloqueia-o como pop-up e o PDF "não aparece".
+    const pdfTab = window.open('', '_blank');
+    pdfTab?.document.write('<p style="font-family:sans-serif;padding:2rem">A preparar a pré-visualização…</p>');
     try {
       const mode = await chooseDedicatedMode(order, 'pdf', labels.get(order.id));
-      if (!mode) return;
+      if (!mode) {
+        pdfTab?.close();
+        return;
+      }
       // Separate function: never fall back to the issuing endpoint when unavailable.
-      const pdfTab = window.open('', '_blank');
       try {
       const { data, error } = await supabase.functions.invoke<Blob>('preview-labels-pdf', {
         body: { order_id: order.id, dedicated_mode: mode },
