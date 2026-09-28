@@ -96,6 +96,8 @@ export default function PalletizationPage() {
   const [showForceDialog, setShowForceDialog] = useState(false);
   const [showReleaseDialog, setShowReleaseDialog] = useState(false);
   const [releaseReason, setReleaseReason] = useState('');
+  const [reopenReason, setReopenReason] = useState('');
+  const [isReopening, setIsReopening] = useState(false);
   const [isReleasingReservation, setIsReleasingReservation] = useState(false);
   const [buildBlockMessage, setBuildBlockMessage] = useState('');
   const [desadvReadOnly, setDesadvReadOnly] = useState(false);
@@ -173,18 +175,13 @@ export default function PalletizationPage() {
       const [orderRes, linesRes, historyRes] = await Promise.all([
         supabase.from('orders').select('*').eq('id', orderId).single(),
         supabase.from('order_lines').select('*').eq('order_id', orderId).order('line_number'),
-        supabase
-          .from('operation_history')
-          .select('id')
-          .eq('entity_type', 'order')
-          .eq('entity_id', orderId)
-          .eq('action', 'desadv_generated')
-          .limit(1),
+        // Bloqueada se houver ficheiro gerado depois da última reabertura.
+        supabase.rpc('order_desadv_locked', { p_order_id: orderId }),
       ]);
 
-      const hasDesadvHistory = (historyRes.data?.length || 0) > 0;
+      const hasDesadvHistory = historyRes.data === true;
       if (historyRes.error) {
-        const message = `Não foi possível verificar o histórico de DESADV. A paletização fica bloqueada para alterações: ${historyRes.error.message}`;
+        const message = `Não foi possível verificar se o ficheiro já foi gerado. A paletização fica bloqueada para alterações: ${historyRes.error.message}`;
         setDesadvHistoryStatus('error');
         setDesadvHistoryError(message);
         setDesadvReadOnly(true);
@@ -193,7 +190,7 @@ export default function PalletizationPage() {
         setDesadvHistoryStatus('blocked');
         setDesadvHistoryError('');
         setDesadvReadOnly(true);
-        setBuildBlockMessage('Esta encomenda tem a ação desadv_generated no histórico. O plano e os SOC atuais são apenas para consulta; a substituição está permanentemente bloqueada, mesmo com confirmação.');
+        setBuildBlockMessage('Esta encomenda já tem o ficheiro gerado. As paletes, os SOC e as etiquetas estão só para consulta. Para os refazer, um administrador tem de reabrir a encomenda.');
       } else {
         setDesadvHistoryStatus('clear');
         setDesadvHistoryError('');
@@ -271,24 +268,44 @@ export default function PalletizationPage() {
     }
   };
 
+  const reopenOrder = async () => {
+    if (!order || reopenReason.trim().length < 10) return;
+    setIsReopening(true);
+    try {
+      const { error } = await supabase.rpc('reopen_order_for_replan', {
+        p_order_id: order.id,
+        p_reason: reopenReason.trim(),
+      });
+      if (error) throw new Error(error.message);
+      toast({
+        title: 'Encomenda reaberta',
+        description: 'Já pode refazer as paletes, as etiquetas e o ficheiro.',
+      });
+      setReopenReason('');
+      await fetchOrderData();
+    } catch (error) {
+      toast({
+        title: 'Não foi possível reabrir',
+        description: error instanceof Error ? error.message : 'Erro desconhecido.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsReopening(false);
+    }
+  };
+
   const verifyNoDesadvHistory = async (checkedOrderId: string): Promise<boolean> => {
     setDesadvHistoryStatus('checking');
     setDesadvHistoryError('');
     try {
-      const { data, error } = await supabase
-        .from('operation_history')
-        .select('id')
-        .eq('entity_type', 'order')
-        .eq('entity_id', checkedOrderId)
-        .eq('action', 'desadv_generated')
-        .limit(1);
+      const { data, error } = await supabase.rpc('order_desadv_locked', { p_order_id: checkedOrderId });
 
       if (error) throw new Error(error.message);
-      if ((data?.length || 0) > 0) {
+      if (data === true) {
         setDesadvHistoryStatus('blocked');
         setDesadvHistoryError('');
         setDesadvReadOnly(true);
-        setBuildBlockMessage('Esta encomenda tem a ação desadv_generated no histórico. O plano e os SOC atuais são apenas para consulta; a substituição está permanentemente bloqueada, mesmo com confirmação.');
+        setBuildBlockMessage('Esta encomenda já tem o ficheiro gerado. As paletes, os SOC e as etiquetas estão só para consulta. Para os refazer, um administrador tem de reabrir a encomenda.');
         const savedPlans = await loadExistingPlans(checkedOrderId);
         setCurrentStep(savedPlans.length > 0 ? 4 : 2);
         return false;
@@ -300,7 +317,7 @@ export default function PalletizationPage() {
       setBuildBlockMessage('');
       return true;
     } catch (error) {
-      const message = `Não foi possível verificar o histórico de DESADV. A paletização fica bloqueada para alterações: ${error instanceof Error ? error.message : 'erro de consulta'}`;
+      const message = `Não foi possível verificar se o ficheiro já foi gerado. A paletização fica bloqueada para alterações: ${error instanceof Error ? error.message : 'erro de consulta'}`;
       setDesadvHistoryStatus('error');
       setDesadvHistoryError(message);
       setDesadvReadOnly(true);
@@ -751,8 +768,9 @@ export default function PalletizationPage() {
       </IndustrialCard>
 
       {isAdmin && (
-        <IndustrialCard className="mb-6">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <details className="mb-6 rounded-lg border border-border bg-card px-4 py-3">
+          <summary className="cursor-pointer text-sm text-muted-foreground">Opções avançadas (administrador)</summary>
+          <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <div className="flex-1">
               <h2 className="font-semibold">Libertar reserva de emissão</h2>
               <p className="mt-1 text-sm text-muted-foreground">
@@ -778,7 +796,7 @@ export default function PalletizationPage() {
               Libertar reserva
             </IndustrialButton>
           </div>
-        </IndustrialCard>
+        </details>
       )}
 
       {buildBlockMessage && (
@@ -786,6 +804,34 @@ export default function PalletizationPage() {
           <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
           <div className="flex-1">
             <p>{buildBlockMessage}</p>
+            {desadvHistoryStatus === 'blocked' && order && isAdmin && (
+              <div className="mt-3 space-y-2">
+                <label className="block text-sm font-medium" htmlFor="reopen-reason">
+                  Reabrir encomenda (só administradores)
+                </label>
+                <textarea
+                  id="reopen-reason"
+                  className="min-h-16 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={reopenReason}
+                  onChange={(event) => setReopenReason(event.target.value)}
+                  placeholder="Motivo (mínimo 10 caracteres), ex.: teste de envio ao Pingo Doce"
+                  maxLength={500}
+                />
+                <IndustrialButton
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void reopenOrder()}
+                  isLoading={isReopening}
+                  disabled={reopenReason.trim().length < 10}
+                  icon={<RotateCcw className="h-4 w-4" />}
+                >
+                  Reabrir encomenda
+                </IndustrialButton>
+                <p className="text-xs text-muted-foreground">
+                  Fica registado no histórico. Ao gerar de novo o ficheiro, a encomenda volta a ficar bloqueada.
+                </p>
+              </div>
+            )}
             {desadvHistoryStatus === 'error' && order && (
               <IndustrialButton
                 className="mt-3"

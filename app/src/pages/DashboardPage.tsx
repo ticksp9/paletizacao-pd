@@ -88,16 +88,28 @@ export default function DashboardPage() {
             .limit(200),
           supabase
             .from('operation_history')
-            .select('entity_id')
+            .select('entity_id, action, created_at')
             .eq('entity_type', 'order')
-            .eq('action', 'desadv_generated'),
+            .in('action', ['desadv_generated', 'desadv_regenerated', 'order_reopened']),
           supabase.from('warehouse_addresses').select('warehouse_code, warehouse_name'),
         ]);
         if (ordersRes.error) throw ordersRes.error;
         if (historyRes.error) throw historyRes.error;
 
         const rawOrders = ordersRes.data ?? [];
-        const desadvIds = new Set((historyRes.data ?? []).map((row) => row.entity_id));
+        // Concluída = ficheiro gerado depois da última reabertura (mesma regra da base de dados).
+        const lastDesadv = new Map<string, string>();
+        const lastReopen = new Map<string, string>();
+        for (const row of historyRes.data ?? []) {
+          const target = row.action === 'order_reopened' ? lastReopen : lastDesadv;
+          const previous = target.get(row.entity_id);
+          if (!previous || row.created_at > previous) target.set(row.entity_id, row.created_at);
+        }
+        const desadvIds = new Set(
+          [...lastDesadv.entries()]
+            .filter(([id, at]) => !lastReopen.has(id) || at > lastReopen.get(id)!)
+            .map(([id]) => id),
+        );
         const warehouseNames = new Map(
           (warehousesRes.data ?? []).map((w) => [String(w.warehouse_code), String(w.warehouse_name)]),
         );

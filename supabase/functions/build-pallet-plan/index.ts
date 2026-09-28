@@ -761,22 +761,22 @@ Deno.serve(async (req) => {
     if (orderError || !currentOrder) {
       throw new Error(`Falha a verificar a encomenda: ${orderError?.message || order_id}`);
     }
-    const [issuedLabels, issuedDesadv] = await Promise.all([
+    const [issuedLabels, desadvLock] = await Promise.all([
       supabase.from("labels").select("id", { count: "exact", head: true }).eq("order_id", order_id),
-      supabase.from("operation_history").select("id", { count: "exact", head: true })
-        .eq("entity_type", "order").eq("entity_id", order_id).eq("action", "desadv_generated"),
+      // Bloqueada se houver ficheiro DESADV gerado depois da última reabertura.
+      supabase.rpc("order_desadv_locked", { p_order_id: order_id }),
     ]);
-    if (issuedLabels.error || issuedDesadv.error ||
-      issuedLabels.count == null || issuedDesadv.count == null) {
+    if (issuedLabels.error || desadvLock.error ||
+      issuedLabels.count == null || typeof desadvLock.data !== "boolean") {
       throw new Error(
-        `Falha a verificar emissões anteriores: ${issuedLabels.error?.message || issuedDesadv.error?.message || "contagem indisponível"}`,
+        `Falha a verificar emissões anteriores: ${issuedLabels.error?.message || desadvLock.error?.message || "contagem indisponível"}`,
       );
     }
-    if (issuedDesadv.count > 0) {
+    if (desadvLock.data) {
       return new Response(
         JSON.stringify({
           success: false,
-          error: "Esta encomenda já tem um DESADV emitido; a paletização e os SOC existentes não podem ser substituídos.",
+          error: "Esta encomenda já tem o ficheiro gerado. Para refazer paletes, etiquetas e ficheiro, um administrador tem de reabrir a encomenda.",
           desadv_blocked: true,
           permanent_block: true,
           code: "DESADV_ALREADY_GENERATED",

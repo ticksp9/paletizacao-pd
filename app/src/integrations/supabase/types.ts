@@ -835,6 +835,11 @@ export type Database = {
     Functions: {
       bootstrap_admin: { Args: never; Returns: boolean }
       generate_soc_code: { Args: never; Returns: string }
+      order_desadv_locked: { Args: { p_order_id: string }; Returns: boolean }
+      reopen_order_for_replan: {
+        Args: { p_order_id: string; p_reason: string }
+        Returns: Json
+      }
       get_user_role: {
         Args: { _user_id: string }
         Returns: Database["public"]["Enums"]["app_role"]
