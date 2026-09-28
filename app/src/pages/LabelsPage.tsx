@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Tag, Download, Printer, FileText, FileSpreadsheet, Loader2, Eye, AlertCircle, CheckCircle2, PlusCircle, MapPin, ClipboardList, Boxes, Box } from 'lucide-react';
+import { Tag, Download, Printer, FileText, FileSpreadsheet, Loader2, Eye, AlertCircle, CheckCircle2, PlusCircle, MapPin, ClipboardList, Boxes, Box, RotateCcw } from 'lucide-react';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { IndustrialCard } from '@/components/ui/IndustrialCard';
 import { IndustrialButton } from '@/components/ui/IndustrialButton';
@@ -11,6 +11,7 @@ import { Label as UiLabel } from '@/components/ui/label';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { ToastAction } from '@/components/ui/toast';
+import { redoOrderPallets } from '@/lib/redoOrder';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import type { Order, OrderStatus, Label } from '@/types/database';
@@ -201,6 +202,8 @@ export default function LabelsPage() {
   const issueResolver = useRef<((confirmed: boolean) => void) | null>(null);
   const { toast } = useToast();
   const { role } = useAuth();
+  const [redoTarget, setRedoTarget] = useState<OrderWithLgs | null>(null);
+  const canRedoOrder = role === 'admin' || role === 'operador';
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -682,6 +685,48 @@ export default function LabelsPage() {
     }
   };
 
+  // "Refazer encomenda": refaz as paletes (um SOC novo por caixa) e emite logo as etiquetas
+  // novas em PDF. Depois só falta "Criar Ficheiro". As permissões são verificadas no servidor.
+  const handleRedoOrder = async (order: OrderWithLgs) => {
+    const key = actionKey(order.id, 'redo');
+    setBusyAction(key);
+    try {
+      const { totalPallets } = await redoOrderPallets(order.id);
+      const { data, error } = await supabase.functions.invoke<FnResponse>('generate-labels-pdf', {
+        body: { order_id: order.id, dedicated_mode: 'boxes' },
+      });
+      let payload: FnResponse | null = data ?? null;
+      if (error) {
+        const context = (error as { context?: unknown }).context;
+        if (context instanceof Response) {
+          try { payload = await context.clone().json() as FnResponse; } catch { /* sem corpo */ }
+        }
+      }
+      if (error || !payload?.success || !payload.data?.pdf_url) {
+        throw new Error(
+          `As paletes foram refeitas, mas as etiquetas não foram emitidas: ${payload?.error || error?.message || 'erro desconhecido'}. Use «Emitir etiquetas».`,
+        );
+      }
+      await downloadBlob(payload.data.pdf_url, `etiquetas_${order.order_number}.pdf`);
+      notifyLabelWarnings(payload.warnings);
+      setRedoTarget(null);
+      await fetchData();
+      toast({
+        title: 'Encomenda refeita',
+        description: `${totalPallets} palete(s) e ${payload.data.labels_count} etiquetas novas (descarregadas). Falta carregar em «Criar Ficheiro».`,
+      });
+    } catch (err) {
+      setRedoTarget(null);
+      toast({
+        title: 'Não foi possível refazer a encomenda',
+        description: err instanceof Error ? err.message : 'Erro desconhecido.',
+        variant: 'destructive',
+      });
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   const handleDownloadZpl = async (order: OrderWithLgs) => {
     const label = zplLabels.get(order.id);
     if (!label?.pdf_storage_path) return;
@@ -895,6 +940,17 @@ export default function LabelsPage() {
                     >
                       Emitir etiquetas
                     </IndustrialButton>
+                    {canRedoOrder && (
+                      <IndustrialButton
+                        variant="outline"
+                        onClick={() => setRedoTarget(order)}
+                        isLoading={isBusy(order.id, 'redo')}
+                        disabled={!allResolved || busyAction !== null}
+                        icon={<RotateCcw className="w-5 h-5" />}
+                      >
+                        Refazer encomenda
+                      </IndustrialButton>
+                    )}
                     <p className="basis-full text-xs text-muted-foreground">
                       Pré-visualizar não grava etiquetas nem atribui SOC; emitir requer confirmação.
                     </p>
@@ -1216,6 +1272,46 @@ export default function LabelsPage() {
               icon={<FileSpreadsheet className="w-5 h-5" />}
             >
               Criar Ficheiro
+            </IndustrialButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!redoTarget}
+        onOpenChange={(open) => { if (!open && !(redoTarget && isBusy(redoTarget.id, 'redo'))) setRedoTarget(null); }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Refazer a encomenda {redoTarget?.order_number}?</DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>A aplicação faz tudo de novo, sozinha:</p>
+                <ul className="list-disc space-y-1 pl-5">
+                  <li>calcula as paletes outra vez;</li>
+                  <li>dá um SOC novo a cada caixa;</li>
+                  <li>emite as etiquetas novas (o PDF é descarregado).</li>
+                </ul>
+                <p>No fim, carregue em <strong>«Criar Ficheiro»</strong> para fazer o ficheiro novo.</p>
+                <p>As etiquetas antigas deixam de valer. Se já estavam coladas nas caixas, troque-as pelas novas.</p>
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <IndustrialButton
+              variant="ghost"
+              onClick={() => setRedoTarget(null)}
+              disabled={!!redoTarget && isBusy(redoTarget.id, 'redo')}
+            >
+              Cancelar
+            </IndustrialButton>
+            <IndustrialButton
+              variant="accent"
+              onClick={() => redoTarget && void handleRedoOrder(redoTarget)}
+              isLoading={!!redoTarget && isBusy(redoTarget.id, 'redo')}
+              icon={<RotateCcw className="w-5 h-5" />}
+            >
+              Sim, refazer
             </IndustrialButton>
           </DialogFooter>
         </DialogContent>

@@ -13,6 +13,8 @@ import { DeleteOrderDialog } from '@/components/orders/DeleteOrderDialog';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
+import { ToastAction } from '@/components/ui/toast';
+import { redoOrderPallets } from '@/lib/redoOrder';
 import { useAuth } from '@/contexts/AuthContext';
 import type { Order, OrderLine, OrderStatus } from '@/types/database';
 import type {
@@ -101,6 +103,8 @@ export default function PalletizationPage() {
   const [deliveryNote, setDeliveryNote] = useState('');
   const [isMarkingDelivered, setIsMarkingDelivered] = useState(false);
   const [showDeliveredDialog, setShowDeliveredDialog] = useState(false);
+  const [showRedoDialog, setShowRedoDialog] = useState(false);
+  const [isRedoing, setIsRedoing] = useState(false);
   const [isReleasingReservation, setIsReleasingReservation] = useState(false);
   const [buildBlockMessage, setBuildBlockMessage] = useState('');
   const [desadvReadOnly, setDesadvReadOnly] = useState(false);
@@ -604,6 +608,42 @@ export default function PalletizationPage() {
     }
   };
 
+  // "Refazer paletes": um só botão que calcula, escolhe e grava o plano de novo, sem passos
+  // intermédios. Usa a sugestão automática; se houver paletes com mais de 8 referências e a
+  // divisão for possível, divide. Apaga as etiquetas antigas e gera SOC novos (um por caixa).
+  const redoPallets = async () => {
+    if (!order || isRedoing) return;
+    setIsRedoing(true);
+    try {
+      const { totalPallets } = await redoOrderPallets(order.id, rules);
+      setShowRedoDialog(false);
+      setPlanPreviews({});
+      setPreviewErrors({});
+      setSelectedOption(null);
+      setEditedPreview(null);
+      setPlanEdits([]);
+      await fetchOrderData();
+      setCurrentStep(4);
+      toast({
+        title: 'Paletes refeitas',
+        description: `${totalPallets} palete(s). Agora emita as etiquetas e crie o ficheiro de novo.`,
+        action: (
+          <ToastAction altText="Ir para as etiquetas" onClick={() => navigate(`/labels?order=${order.id}`)}>
+            Ir para as etiquetas
+          </ToastAction>
+        ),
+      });
+    } catch (error) {
+      toast({
+        title: 'Não foi possível refazer as paletes',
+        description: error instanceof Error ? error.message : 'Erro desconhecido.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsRedoing(false);
+    }
+  };
+
   const choosePlanOption = (selection: PalletPlanSelection) => {
     if (!planPreviews[selection] || isCalculating) return;
     setSelectedOption(selection);
@@ -715,6 +755,11 @@ export default function PalletizationPage() {
       subtitle={order.customer_name || 'Cliente não especificado'}
       actions={
         <div className="flex items-center gap-2">
+          {palletPlans.length > 0 && canModifyPalletPlan && (
+            <IndustrialButton variant="accent" onClick={() => setShowRedoDialog(true)} isLoading={isRedoing} icon={<RotateCcw className="w-5 h-5" />}>
+              Refazer paletes
+            </IndustrialButton>
+          )}
           {isAdmin && (
             <IndustrialButton variant="destructive" size="sm" onClick={() => setShowDeleteDialog(true)} icon={<Trash2 className="w-4 h-4" />}>
               Eliminar
@@ -824,6 +869,31 @@ export default function PalletizationPage() {
           </IndustrialButton>
         </div>
       )}
+
+      <Dialog open={showRedoDialog} onOpenChange={(open) => { if (!isRedoing) setShowRedoDialog(open); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Refazer as paletes?</DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>A aplicação vai calcular as paletes da encomenda {order.order_number} de novo, sozinha.</p>
+                <ul className="list-disc space-y-1 pl-5">
+                  <li>As paletes e as etiquetas atuais são substituídas.</li>
+                  <li>Cada caixa recebe um SOC novo.</li>
+                  <li>Depois tem de <strong>emitir as etiquetas</strong> e <strong>criar o ficheiro</strong> outra vez.</li>
+                </ul>
+                <p>Se já colou etiquetas nas caixas, deite-as fora e cole as novas.</p>
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <IndustrialButton variant="ghost" onClick={() => setShowRedoDialog(false)} disabled={isRedoing}>Cancelar</IndustrialButton>
+            <IndustrialButton variant="primary" onClick={() => void redoPallets()} isLoading={isRedoing} icon={<RotateCcw className="h-4 w-4" />}>
+              Sim, refazer
+            </IndustrialButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={showDeliveredDialog} onOpenChange={setShowDeliveredDialog}>
         <DialogContent>
