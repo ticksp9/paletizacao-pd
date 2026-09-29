@@ -191,8 +191,10 @@ function fitsAnywhere(spec: BoxSpec, size: PalletSize): boolean {
 //  * As caixas são encostadas a partir de um canto (em filas ou em colunas). O espaço que
 //    sobra fica junto à borda, nunca no meio (MIN_COMPACTNESS).
 //  * Cada caixa tem apoio quase total por baixo (SUPPORT_RATIO).
-//  * Só se empilha sobre camadas quase completas (MIN_STACK_COVERAGE): não há degraus nem torres.
-//    A camada de cima pode ser incompleta; o resto vai para outra palete.
+//  * Só se empilha sobre camadas quase completas (MIN_STACK_COVERAGE): não há torres.
+//    Por cima de uma camada incompleta ainda pode ir UMA camada pequena com as caixas que
+//    sobram (todas juntas e bem apoiadas), em vez de uma palete nova com 2 ou 3 caixas
+//    (decisão do utilizador, 29/09). Depois dessa, a palete fecha.
 //  * Duas caixas baixas podem ir uma em cima da outra (a de cima mais pequena, bem apoiada)
 //    para a coluna ficar à altura da camada, por exemplo 130 + 150 ao lado de caixas de 290.
 //  * Entre as camadas possíveis fica a que dá prioridade ao LG mais alto (regra dos LG).
@@ -494,6 +496,7 @@ function packPallet(size: PalletSize, queue: WorkItem[]): PalletResult | null {
   let z = 0;
   let weightKg = 0;
   let layer = 0;
+  let capNext = false; // a próxima camada é a pequena de cima (depois fecha)
 
   const leftBoxes = () => [...remaining.values()].reduce((s, n) => s + n, 0);
 
@@ -557,7 +560,7 @@ function packPallet(size: PalletSize, queue: WorkItem[]): PalletResult | null {
       }
     }
     const coverage = best.fill.fullArea / baseArea;
-    const lastLayer = coverage < MIN_STACK_COVERAGE;
+    const lastLayer = capNext || coverage < MIN_STACK_COVERAGE;
     let placements: StackedPlacement[] = best.fill.placements.map((p) => ({ ...p, z: z + (p.dz ?? 0) }));
     let layerWeight = best.fill.weightKg;
     let layerHeight = best.fill.height;
@@ -627,7 +630,8 @@ function packPallet(size: PalletSize, queue: WorkItem[]): PalletResult | null {
     const layerTop = z + layerHeight;
     below = layerRects.filter((r) => r.top >= layerTop - LAYER_TOLERANCE_MM);
     z = layerTop;
-    if (lastLayer) break;
+    if (capNext) break;
+    if (lastLayer) capNext = true;
   }
 
   if (boxes.length === 0) return null;
@@ -1211,7 +1215,20 @@ Deno.serve(async (req) => {
 
       if (groupBoxes > MIXED_MAX_BOXES_PER_LG) {
         // LG com mais de 5 caixas → palete(s) dedicada(s)
-        dedicated.push(...packGroup(cloneItems(group).map((g) => g)));
+        const groupPallets = packGroup(cloneItems(group));
+        // Última palete do LG com poucas caixas: desfaz-se e as caixas vão para as paletes
+        // mistas (decisão do utilizador, 29/09), em vez de uma palete quase vazia.
+        const tail = groupPallets[groupPallets.length - 1];
+        if (groupPallets.length > 1 && tail.boxes.length <= MIXED_MAX_BOXES_PER_LG) {
+          groupPallets.pop();
+          const tailByLine = new Map<string, number>();
+          for (const box of tail.boxes) tailByLine.set(box.order_line_id, (tailByLine.get(box.order_line_id) || 0) + 1);
+          for (const [lineId, count] of tailByLine) {
+            const source = group.find((g) => g.order_line_id === lineId)!;
+            leftovers.push({ ...source, boxes: count });
+          }
+        }
+        dedicated.push(...groupPallets);
       } else {
         // LG com 5 ou menos caixas → pode ir para palete mista
         leftovers.push(...cloneItems(group));
