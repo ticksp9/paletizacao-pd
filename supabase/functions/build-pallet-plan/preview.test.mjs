@@ -179,3 +179,29 @@ test("nunca se empilha sobre uma camada pequena: o resto fica para outra palete"
   const pallet = packPallet(sizes[1], queue);
   assertFlatNoTowers(pallet);
 });
+
+test("regra do caracol: a camada começa no canto da frente e segue pela borda", () => {
+  const pallet = packPallet(sizes[1], [item(1, 8, 400, 300, 250)]);
+  const first = layersOf(pallet)[0].sort((a, b) => a.placement_sequence - b.placement_sequence);
+  assert.equal(first[0].pos_x, 0);
+  assert.equal(first[0].pos_y, 0);
+  // as primeiras caixas vão ao longo da frente (y = 0), da esquerda para a direita
+  assert.equal(first[1].pos_y, 0);
+  assert.ok(first[1].pos_x > first[0].pos_x);
+  // não há caixas no meio antes de a borda estar ocupada
+  const lastEdge = first.findIndex((b) => b.pos_x > 0 && b.pos_y > 0 &&
+    b.pos_x + b.box_l < 1200 && b.pos_y + b.box_w < 800);
+  assert.ok(lastEdge === -1 || lastEdge >= 4);
+});
+
+test("regra dos LG: com caixas iguais, o LG mais alto fica sempre em baixo", () => {
+  const pallet = packPallet(sizes[1], [
+    item(2, 12, 400, 300, 250, { lg: "LG100", lgNum: 100 }),
+    item(1, 12, 400, 300, 250, { lg: "LG200", lgNum: 200 }),
+  ]);
+  assertFlatNoTowers(pallet);
+  const highestLow = Math.max(...pallet.boxes.filter((b) => b.lg_code === "LG200").map((b) => b.layer));
+  const lowestHigh = Math.min(...pallet.boxes.filter((b) => b.lg_code === "LG100").map((b) => b.layer));
+  assert.ok(highestLow <= lowestHigh, "há LG100 por baixo de LG200");
+  assert.equal(layersOf(pallet)[0].every((b) => b.lg_code === "LG200"), true);
+});

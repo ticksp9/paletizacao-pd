@@ -14,6 +14,7 @@ const DEFAULT_BOX_MM = { l: 400, w: 300, h: 300 };
 const MIXED_MAX_BOXES_PER_LG = 5; // regra das 5 caixas
 const SUPPORT_RATIO = 0.7; // apoio mínimo da base sobre caixas inferiores
 const LAYER_TOLERANCE_MM = 20; // diferença máxima de altura entre caixas da mesma camada
+const LG_PRIORITY_MIN_COVERAGE = 0.9; // camadas aceites para a regra dos LG: ≥90% da melhor cobertura
 const MIN_STACK_COVERAGE = 0.5; // só se empilha sobre camadas que cubram pelo menos metade da base
 const PALLET_HEIGHT_LIMIT_MM: Record<string, number> = {
   "120x80": 1800,
@@ -186,7 +187,11 @@ function fitsAnywhere(spec: BoxSpec, size: PalletSize): boolean {
 // Loiça é frágil: a palete é montada em camadas completas e niveladas, sem torres.
 //  * Cada camada usa caixas da mesma altura (diferença até LAYER_TOLERANCE_MM), por isso o
 //    topo de cada camada fica plano e a camada seguinte assenta por igual.
-//  * Em cada altura possível experimenta-se encher a camada e fica a que cobre mais base.
+//  * Em cada altura possível experimenta-se encher a camada; fica a que cobre mais base,
+//    dando prioridade ao LG mais alto (regra dos LG).
+//  * Dentro da camada as caixas seguem a regra do caracol (à volta, de fora para dentro);
+//    se em filas couberem mais caixas, usam-se filas (a palete fica mais cheia e firme).
+//  * As caixas podem rodar (qualquer face para baixo), sempre dentro da palete.
 //  * As caixas do mesmo artigo (e da mesma loja/LG) são postas seguidas, lado a lado.
 //  * Só se empilha sobre uma camada que cubra pelo menos MIN_STACK_COVERAGE da base.
 //    Uma camada mais pequena é sempre a última (topo); o resto vai para outra palete.
@@ -216,6 +221,40 @@ interface LayerFill {
   weightKg: number;
 }
 
+/**
+ * Regra do caracol (como os operadores montam): em cada camada as caixas vão à volta da
+ * palete no sentido dos ponteiros do relógio, a começar no canto da frente à esquerda,
+ * primeiro o anel de fora e depois para dentro. Devolve a ordem de preferência do ponto.
+ */
+function clockwiseSpiralRank(
+  size: PalletSize,
+  point: { x: number; y: number },
+  orientation: Orient,
+): [number, number, number, number] {
+  const right = size.length - (point.x + orientation.l);
+  const back = size.width - (point.y + orientation.w);
+  const ring = Math.min(point.x, point.y, right, back);
+  const ringLength = size.length - 2 * ring;
+  const ringWidth = size.width - 2 * ring;
+  let distance: number;
+
+  if (point.y === ring) {
+    distance = point.x - ring;
+  } else if (right === ring) {
+    distance = ringLength + point.y - ring;
+  } else if (back === ring) {
+    distance = ringLength + ringWidth + size.length - ring - (point.x + orientation.l);
+  } else {
+    distance = 2 * ringLength + ringWidth + size.width - ring - (point.y + orientation.w);
+  }
+
+  return [ring, distance, point.y, point.x];
+}
+
+function compareRank(a: [number, number, number, number], b: [number, number, number, number]): number {
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2] || a[3] - b[3];
+}
+
 function overlapArea(ax: number, ay: number, al: number, aw: number, b: Rect): number {
   const ox = Math.max(0, Math.min(ax + al, b.x + b.l) - Math.max(ax, b.x));
   const oy = Math.max(0, Math.min(ay + aw, b.y + b.w) - Math.max(ay, b.y));
@@ -237,6 +276,7 @@ function fillLayer(
   existing: Rect[],
   weightBudgetKg: number,
   rotatedFirst: boolean,
+  spiral = true,
 ): LayerFill {
   const rects: Rect[] = [...existing];
   const placements: LayerPlacement[] = [];
@@ -263,21 +303,24 @@ function fillLayer(
 
     while (count > 0) {
       if (weightKg + boxWeight > weightBudgetKg) break;
-      // Canto de trás-esquerdo primeiro, fila a fila: as caixas do mesmo artigo ficam juntas.
-      points.sort((a, b) => a.y - b.y || a.x - b.x);
-      let chosen: { x: number; y: number; o: Orient } | null = null;
+      // Regra do caracol: o ponto livre mais adiantado na volta à palete. As caixas do
+      // mesmo artigo são postas seguidas, por isso ficam juntas.
+      let chosen: { x: number; y: number; o: Orient; rank: [number, number, number, number] } | null = null;
       for (const p of points) {
         for (const o of opts) {
           if (p.x + o.l > size.length || p.y + o.w > size.width) continue;
+          // Sem caracol: filas da frente para trás, da esquerda para a direita.
+          const rank: [number, number, number, number] = spiral
+            ? clockwiseSpiralRank(size, p, o)
+            : [0, p.y, p.x, 0];
+          if (chosen && compareRank(rank, chosen.rank) >= 0) continue;
           if (rects.some((r) => overlapArea(p.x, p.y, o.l, o.w, r) > 0)) continue;
           if (z > 0) {
             const support = below.reduce((sum, r) => sum + overlapArea(p.x, p.y, o.l, o.w, r), 0);
             if (support < o.l * o.w * SUPPORT_RATIO) continue;
           }
-          chosen = { x: p.x, y: p.y, o };
-          break;
+          chosen = { x: p.x, y: p.y, o, rank };
         }
-        if (chosen) break;
       }
       if (!chosen) break;
       const { x, y, o } = chosen;
@@ -323,24 +366,43 @@ function packPallet(size: PalletSize, queue: WorkItem[]): PalletResult | null {
         ? orientations(item.spec).filter((o) => z + o.h <= usableHeight(size)).map((o) => o.h)
         : []
     ))].sort((a, b) => a - b); // mais baixa primeiro: em empate fica a caixa deitada
-    let best: { fill: LayerFill; maxH: number } | null = null;
+    const fills: Array<{ fill: LayerFill; maxH: number; spiral: boolean }> = [];
     for (const h of heights) {
-      for (const rotatedFirst of [false, true]) {
-        const fill = fillLayer(
-          size, items, remaining, z, h - LAYER_TOLERANCE_MM, h, below, [], weightLimit - weightKg, rotatedFirst,
-        );
-        if (fill.placements.length === 0) continue;
-        // Mais base coberta; em empate, mais caixas; em empate, a camada mais alta.
-        if (
-          !best ||
-          fill.fullArea > best.fill.fullArea * 1.01 ||
-          (fill.fullArea >= best.fill.fullArea * 0.99 && fill.placements.length > best.fill.placements.length)
-        ) {
-          best = { fill, maxH: h };
+      for (const spiral of [true, false]) {
+        for (const rotatedFirst of [false, true]) {
+          const fill = fillLayer(
+            size, items, remaining, z, h - LAYER_TOLERANCE_MM, h, below, [], weightLimit - weightKg,
+            rotatedFirst, spiral,
+          );
+          if (fill.placements.length === 0) continue;
+          fills.push({ fill, maxH: h, spiral });
         }
       }
     }
-    if (!best) break;
+    if (fills.length === 0) break;
+    // Regra dos LG: entre as camadas que cobrem quase o máximo, fica a que dá mais base ao
+    // LG mais alto ainda por pôr (depois ao seguinte, e assim por diante); os LG mais altos
+    // ficam em baixo. Em empate, a que cobre mais base.
+    const maxArea = Math.max(...fills.map((f) => f.fill.fullArea));
+    const lgOrder = [...new Set(items.filter((item) => (remaining.get(item) ?? 0) > 0).map((item) => item.lg_num))]
+      .sort((a, b) => b - a);
+    // Área de base ocupada por cada LG (maior LG primeiro): caixas deitadas contam o mesmo
+    // que em pé, por isso não se preferem caixas em pé só por caberem mais numa camada.
+    const lgVector = (fill: LayerFill) => lgOrder.map((lg) => fill.placements
+      .filter((p) => p.item.lg_num === lg)
+      .reduce((sum, p) => sum + p.o.l * p.o.w, 0));
+    const best = fills
+      .filter((f) => f.fill.fullArea >= maxArea * LG_PRIORITY_MIN_COVERAGE)
+      .map((f) => ({ ...f, vector: lgVector(f.fill) }))
+      .sort((a, b) => {
+        for (let i = 0; i < a.vector.length; i++) {
+          if (a.vector[i] !== b.vector[i]) return b.vector[i] - a.vector[i];
+        }
+        // Mais base coberta; depois o caracol (como os operadores montam); depois mais caixas.
+        return b.fill.fullArea - a.fill.fullArea ||
+          Number(b.spiral) - Number(a.spiral) ||
+          b.fill.placements.length - a.fill.placements.length;
+      })[0];
 
     const coverage = best.fill.fullArea / baseArea;
     const lastLayer = coverage < MIN_STACK_COVERAGE;
