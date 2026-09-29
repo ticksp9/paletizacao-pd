@@ -807,15 +807,19 @@ Deno.serve(async (req) => {
         : [];
       const totalMappedBoxes = boxesPerSoc.reduce((sum, item) => sum + item.boxes, 0) || 1;
       // Um SOC por caixa: cada caixa leva as peças de uma caixa cheia e a última leva o resto
-      // (ex.: 50 peças, 12 por caixa → 12, 12, 12, 12, 2).
+      // (ex.: 50 peças, 12 por caixa → 12, 12, 12, 12, 2). Numa palete completa o SOC da
+      // palete leva as caixas cheias todas (ex.: 3 caixas → 36) e o resto segue igual.
       const allPerBox = boxesPerSoc.length > 0 && boxesPerSoc.every((item) => perBoxSocs.has(item.soc));
+      const fullBoxesBeforeLast = boxesPerSoc.slice(0, -1)
+        .reduce((sum, item) => sum + item.boxes * piecesPerBox, 0);
+      const sequential = allPerBox || (boxesPerSoc.length > 1 && fullBoxesBeforeLast < lineQty);
       let remainingQty = lineQty;
 
       for (const [socIndex, { soc, boxes, palletItemCount }] of boxesPerSoc.entries()) {
         let qtyForSoc: number;
-        if (allPerBox) {
+        if (sequential) {
           const isLast = socIndex === boxesPerSoc.length - 1;
-          qtyForSoc = isLast ? remainingQty : Math.min(piecesPerBox, remainingQty);
+          qtyForSoc = isLast ? remainingQty : Math.min(boxes * piecesPerBox, remainingQty);
           remainingQty -= qtyForSoc;
         } else {
           qtyForSoc = socCodes.length === 1 ? lineQty : lineQty * (boxes / totalMappedBoxes);

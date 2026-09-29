@@ -268,6 +268,44 @@ export type Database = {
         }
         Relationships: []
       }
+      order_full_pallets: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          lines: Json
+          order_id: string
+          position: number
+          store_code: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          lines: Json
+          order_id: string
+          position: number
+          store_code: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          lines?: Json
+          order_id?: string
+          position?: number
+          store_code?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "order_full_pallets_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       order_lines: {
         Row: {
           article_code: string
@@ -585,6 +623,7 @@ export type Database = {
           packaging_id: string | null
           pallet_number: number
           pallet_size: string | null
+          single_label: boolean
           soc_code: string | null
           total_boxes: number | null
           total_layers: number | null
@@ -606,6 +645,7 @@ export type Database = {
           packaging_id?: string | null
           pallet_number: number
           pallet_size?: string | null
+          single_label?: boolean
           soc_code?: string | null
           total_boxes?: number | null
           total_layers?: number | null
@@ -627,6 +667,7 @@ export type Database = {
           packaging_id?: string | null
           pallet_number?: number
           pallet_size?: string | null
+          single_label?: boolean
           soc_code?: string | null
           total_boxes?: number | null
           total_layers?: number | null
@@ -837,6 +878,10 @@ export type Database = {
       generate_soc_code: { Args: never; Returns: string }
       mark_order_delivered: {
         Args: { p_order_id: string; p_note?: string | null }
+        Returns: Json
+      }
+      set_order_full_pallets: {
+        Args: { p_order_id: string; p_pallets: Json }
         Returns: Json
       }
       order_change_block_reason: {

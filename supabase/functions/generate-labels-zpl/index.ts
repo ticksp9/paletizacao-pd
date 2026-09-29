@@ -381,7 +381,7 @@ if (import.meta.main) Deno.serve(async (req) => {
 
     let query = supabase
       .from("palletization_plans")
-      .select("id, pallet_number, soc_code, lg_code, notes")
+      .select("id, pallet_number, soc_code, lg_code, notes, single_label")
       .eq("order_id", order_id)
       .order("pallet_number");
     if (pallet_ids?.length > 0) query = query.in("id", pallet_ids);
@@ -495,7 +495,8 @@ if (import.meta.main) Deno.serve(async (req) => {
         groups,
         containerSocByPlan.get(pallet.id) || new Map(),
         pallet.soc_code || "",
-        dedicatedMode,
+        // Palete completa (definida pelo administrador): 1 SOC e 1 etiqueta.
+        pallet.single_label ? "pallet" : dedicatedMode,
       );
 
       for (const volume of volumes) {

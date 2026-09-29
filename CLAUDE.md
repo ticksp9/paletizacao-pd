@@ -22,7 +22,9 @@ gera etiquetas SOC (PDF/ZPL) e o DESADV CSV (CD 802). Utilizador fala português
 - Não inventar dados nem utilizadores.
 
 ## Regras de negócio (Pingo Doce / JM)
-- SOC = "SOC" + 7 dígitos, nunca repetido; um SOC por loja em cada palete (contentor por loja).
+- SOC = "SOC" + 7 dígitos, nunca repetido; um SOC por caixa (pallet_items.soc_code), uma etiqueta por caixa.
+- Palete completa (admin, tabela order_full_pallets): caixas de uma só loja escolhidas pelo administrador;
+  leva 1 SOC (no contentor da loja) e 1 etiqueta; palletization_plans.single_label = true. O resto vai para mistas.
 - Antes da 1.ª encomenda real: `setval('public.soc_code_seq', <último SOC manual, ≥27644>, true)` (ver checklist em docs/replit.md).
 - Altura máx. com palete: 120x80 e 120x100 = 1800 mm; 60x80 = 1250 mm. Peso: 1000 kg / 500 kg. Caixa > 15 kg aviso.
 - Palete mista > 8 referências: avisar e deixar o operador escolher/corrigir (pré-visualização sem gastar SOC).

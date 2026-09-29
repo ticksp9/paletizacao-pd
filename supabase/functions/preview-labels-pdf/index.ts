@@ -55,7 +55,7 @@ Deno.serve(async (req) => {
 
     const { data: pallets, count: palletCount, error: palletError } = await supabase
       .from("palletization_plans")
-      .select("id, pallet_number, soc_code", { count: "exact" })
+      .select("id, pallet_number, soc_code, single_label", { count: "exact" })
       .eq("order_id", order_id).order("pallet_number");
     if (palletError || palletCount == null || pallets?.length !== palletCount) {
       throw new Error("Não foi possível ler todas as paletes da encomenda");
@@ -114,7 +114,7 @@ Deno.serve(async (req) => {
           );
         }
       }
-      const volumes = planLabelVolumes(groups, socByStore, "", mode);
+      const volumes = planLabelVolumes(groups, socByStore, "", pallet.single_label ? "pallet" : mode);
       for (const volume of volumes) {
         const name = await resolveStoreName(
           supabase, warehouseCode, volume.store_code, volume.lg_code, cache,

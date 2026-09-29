@@ -7,6 +7,7 @@ import { IndustrialButton } from '@/components/ui/IndustrialButton';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { StepIndicator } from '@/components/ui/StepIndicator';
 import { PalletTable } from '@/components/palletization/PalletTable';
+import { FullPalletsCard } from '@/components/palletization/FullPalletsCard';
 import { Pallet3DViewer } from '@/components/palletization/Pallet3DViewer';
 import { PalletizationRulesForm } from '@/components/palletization/PalletizationRulesForm';
 import { DeleteOrderDialog } from '@/components/orders/DeleteOrderDialog';
@@ -391,6 +392,7 @@ export default function PalletizationPage() {
         total_boxes: plan.total_boxes || boxes.length,
         total_pieces: plan.total_pieces || boxes.reduce((s, b) => s + b.quantity, 0),
         is_mixed: !!plan.is_mixed,
+        single_label: !!plan.single_label,
         base_usage_pct: plan.base_usage_pct ?? null,
         warnings: Array.isArray(plan.warnings) ? (plan.warnings as string[]) : [],
         lg_codes: [...new Set(boxes.map((b) => b.lg_code).filter(Boolean))] as string[],
@@ -644,6 +646,23 @@ export default function PalletizationPage() {
     }
   };
 
+  // Depois de criar/remover uma palete completa: se a encomenda já tem paletes, refaz logo.
+  const afterFullPalletsSaved = async () => {
+    if (!order || palletPlans.length === 0) return;
+    const { totalPallets } = await redoOrderPallets(order.id, rules);
+    setPlanPreviews({});
+    setPreviewErrors({});
+    setSelectedOption(null);
+    setEditedPreview(null);
+    setPlanEdits([]);
+    await fetchOrderData();
+    setCurrentStep(4);
+    toast({
+      title: 'Paletes refeitas',
+      description: `${totalPallets} palete(s). Agora emita as etiquetas e crie o ficheiro de novo.`,
+    });
+  };
+
   const choosePlanOption = (selection: PalletPlanSelection) => {
     if (!planPreviews[selection] || isCalculating) return;
     setSelectedOption(selection);
@@ -869,6 +888,13 @@ export default function PalletizationPage() {
           </IndustrialButton>
         </div>
       )}
+
+      <FullPalletsCard
+        orderId={order.id}
+        orderLines={orderLines}
+        canEdit={isAdmin && canModifyPalletPlan}
+        onSaved={afterFullPalletsSaved}
+      />
 
       <Dialog open={showRedoDialog} onOpenChange={(open) => { if (!isRedoing) setShowRedoDialog(open); }}>
         <DialogContent>

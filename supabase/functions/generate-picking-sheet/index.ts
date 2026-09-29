@@ -195,7 +195,7 @@ Deno.serve(async (req) => {
     if (sheetMode === "soc") {
       const { data: plans, error: plansErr } = await supabase
         .from("palletization_plans")
-        .select("id, pallet_number, soc_code")
+        .select("id, pallet_number, soc_code, single_label")
         .eq("order_id", order_id)
         .order("pallet_number", { ascending: true });
       if (plansErr) throw new Error(plansErr.message);
@@ -207,6 +207,8 @@ Deno.serve(async (req) => {
       const planIds = plans.map((p) => p.id);
       const palletNumberByPlan = new Map(plans.map((p) => [p.id, Number(p.pallet_number)]));
       const planSocByPlan = new Map(plans.map((p) => [p.id, String(p.soc_code || "").trim()]));
+      // Palete completa: 1 SOC para todas as caixas da palete (sem SOC por caixa).
+      const singleLabelPlans = new Set(plans.filter((p) => p.single_label).map((p) => p.id));
 
       const { data: items, error: itemsErr } = await supabase
         .from("pallet_items")
@@ -230,7 +232,7 @@ Deno.serve(async (req) => {
 
       interface BoxRow {
         pallet: number; soc: string; store: string; storeName: string; lg: string;
-        ean: string; description: string; qty: number; lineId: string;
+        ean: string; description: string; qty: number; lineId: string; count: number;
       }
       const boxes: BoxRow[] = [];
       let missingSoc = false;
@@ -243,7 +245,7 @@ Deno.serve(async (req) => {
         let soc = String(it.soc_code || "").trim();
         if (!soc) {
           soc = containerSoc.get(`${it.palletization_plan_id}|${store}`) || planSocByPlan.get(it.palletization_plan_id) || "";
-          missingSoc = true;
+          if (!singleLabelPlans.has(it.palletization_plan_id)) missingSoc = true;
         }
         boxes.push({
           pallet: palletNumberByPlan.get(it.palletization_plan_id) ?? 0,
@@ -255,6 +257,7 @@ Deno.serve(async (req) => {
           description: String(line?.article_description || artByKey.get(ean)?.description || ""),
           qty: 0,
           lineId: String(it.order_line_id || ""),
+          count: 1,
         });
       }
       if (missingSoc) {
@@ -280,6 +283,22 @@ Deno.serve(async (req) => {
           remaining -= b.qty;
         });
       }
+
+      // Palete completa: as caixas do mesmo artigo com o mesmo SOC ficam numa só linha.
+      {
+        const merged = new Map<string, BoxRow>();
+        for (const b of boxes) {
+          const key = `${b.soc}|${b.lineId}`;
+          const current = merged.get(key);
+          if (current) {
+            current.count += 1;
+            current.qty += b.qty;
+          } else merged.set(key, { ...b });
+        }
+        boxes.length = 0;
+        boxes.push(...merged.values());
+      }
+      const totalBoxCount = boxes.reduce((sum, b) => sum + b.count, 0);
 
       const lgNum = (lg: string) => parseInt(lg.replace(/\D/g, ""), 10) || 0;
       boxes.sort((a, b) =>
@@ -321,7 +340,7 @@ Deno.serve(async (req) => {
         let y = PH - MG - 12;
         page.drawText(fit(bS, `LISTA DE CAIXAS E SOC - Encomenda ${sanitize(String(order.order_number || "-"))}`, 14, usableW), { x: MG, y, size: 14, font: bS });
         y -= 15;
-        page.drawText(fit(fS, `Armazem ${orderWarehouse || "-"} | Entrega: ${order.delivery_date ? fmtDate(order.delivery_date) : "-"} | Guia: ${order.transport_guide || "-"} | ${boxes.length} caixas`, 9, usableW), { x: MG, y, size: 9, font: fS, color: rgb(0.3, 0.3, 0.3) });
+        page.drawText(fit(fS, `Armazem ${orderWarehouse || "-"} | Entrega: ${order.delivery_date ? fmtDate(order.delivery_date) : "-"} | Guia: ${order.transport_guide || "-"} | ${totalBoxCount} caixas`, 9, usableW), { x: MG, y, size: 9, font: fS, color: rgb(0.3, 0.3, 0.3) });
         y -= 20;
         page.drawRectangle({ x: MG, y: y - 4, width: usableW, height: 15, color: rgb(0.88, 0.9, 0.94) });
         for (let c = 0; c < colLabels.length; c++) cell(page, c, colLabels[c], y, bS, 8.5);
@@ -346,13 +365,13 @@ Deno.serve(async (req) => {
           cell(pg, 3, (b.lg || "-").replace(/^LG/i, ""), y, mS, 9);
           cell(pg, 4, b.ean || "-", y, mS, 9);
           cell(pg, 5, b.description || "-", y, fS, 9);
-          cell(pg, 6, "1", y, mbS, 10);
+          cell(pg, 6, String(b.count), y, mbS, 10);
           cell(pg, 7, String(Math.round(b.qty)), y, mS, 9);
           // quadrado para marcar na conferência
           const bx = colX[8] + colW[8] / 2 - 4.5;
           pg.drawRectangle({ x: bx, y: y - 2, width: 9, height: 9, borderColor: rgb(0.3, 0.3, 0.3), borderWidth: 0.8 });
           y -= ROW;
-          gBoxes++; gUnits += b.qty;
+          gBoxes += b.count; gUnits += b.qty;
           i++;
         }
         totalUnits += gUnits;
@@ -362,8 +381,8 @@ Deno.serve(async (req) => {
       y -= 4;
       if (y < MG + 30) { ({ page: pg, y } = header()); }
       pg.drawRectangle({ x: MG, y: y - 4, width: usableW, height: 16, color: rgb(0.88, 0.93, 0.98) });
-      pg.drawText(`TOTAL: ${boxes.length} caixas - ${Math.round(totalUnits)} peças`, { x: colX[2] + 3, y, size: 9.5, font: bS });
-      cell(pg, 6, String(boxes.length), y, mbS, 10);
+      pg.drawText(`TOTAL: ${totalBoxCount} caixas - ${Math.round(totalUnits)} peças`, { x: colX[2] + 3, y, size: 9.5, font: bS });
+      cell(pg, 6, String(totalBoxCount), y, mbS, 10);
       cell(pg, 7, String(Math.round(totalUnits)), y, mbS, 9);
 
       const totalPagesS = pagesS.length;
@@ -384,7 +403,7 @@ Deno.serve(async (req) => {
         storage_path: pathS,
         filename: `lista_caixas_soc_${order.order_number}.pdf`,
         pages: totalPagesS,
-        totals: { boxes: boxes.length, units: totalUnits },
+        totals: { boxes: totalBoxCount, units: totalUnits },
         warnings,
       }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }

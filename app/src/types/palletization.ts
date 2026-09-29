@@ -34,6 +34,8 @@ export interface PalletPlanResult {
   total_boxes: number;
   total_pieces: number;
   is_mixed: boolean;
+  /** Palete completa definida pelo administrador: 1 SOC e 1 etiqueta. */
+  single_label?: boolean;
   base_usage_pct: number | null;
   warnings: string[];
   lg_codes: string[];

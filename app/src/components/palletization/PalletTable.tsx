@@ -22,7 +22,7 @@ export function PalletTable({ pallets, orderId, onView3D }: Props) {
           <TableHead className="text-right">Caixas</TableHead>
           <TableHead className="text-right">Camadas</TableHead>
           <TableHead className="text-right">Altura</TableHead>
-          <TableHead>Mista?</TableHead>
+          <TableHead>Tipo</TableHead>
           <TableHead className="text-right">3D</TableHead>
         </TableRow>
       </TableHeader>
@@ -39,7 +39,13 @@ export function PalletTable({ pallets, orderId, onView3D }: Props) {
             <TableCell className="text-right">{p.total_layers}</TableCell>
             <TableCell className="text-right">{(p.height_mm / 1000).toFixed(2)} m</TableCell>
             <TableCell>
-              {p.is_mixed ? <Badge variant="destructive">MISTA</Badge> : <span className="text-muted-foreground">—</span>}
+              {p.single_label ? (
+                <Badge className="bg-emerald-600 hover:bg-emerald-600">COMPLETA · 1 etiqueta</Badge>
+              ) : p.is_mixed ? (
+                <Badge variant="destructive">MISTA</Badge>
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              )}
             </TableCell>
             <TableCell className="text-right">
               <div className="flex items-center justify-end gap-2">

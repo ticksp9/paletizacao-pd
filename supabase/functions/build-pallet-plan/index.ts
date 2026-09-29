@@ -107,6 +107,14 @@ interface PalletResult {
   layers: number;
   warnings: string[];
   base_usage_pct: number;
+  /** Palete completa definida pelo administrador: 1 SOC e 1 etiqueta. */
+  single_label?: boolean;
+}
+
+interface FullPalletRow {
+  position: number;
+  store_code: string;
+  lines: Array<{ order_line_id: string; boxes: number }>;
 }
 
 type PalletSizeName = "120x80" | "60x80" | "120x100";
@@ -564,7 +572,7 @@ function repackBoxes(boxes: PlacedBox[], size: PalletSize): PalletResult {
 function splitMixedPallets(pallets: PalletResult[]): PalletResult[] {
   const result: PalletResult[] = [];
   for (const pallet of pallets) {
-    if (!isMixedPallet(pallet) || referenceCount(pallet) <= 8) {
+    if (pallet.single_label || !isMixedPallet(pallet) || referenceCount(pallet) <= 8) {
       result.push(pallet);
       continue;
     }
@@ -634,6 +642,13 @@ function parsePlanEdits(raw: unknown): PlanEdit[] {
 function applyPlanEdits(pallets: PalletResult[], edits: PlanEdit[]): PalletResult[] {
   const result = [...pallets];
   for (const edit of edits) {
+    const touched = edit.type === "resize_pallet"
+      ? [edit.pallet_number]
+      : [edit.from_pallet, ...(edit.to_pallet === null ? [] : [edit.to_pallet])];
+    const locked = touched.find((n) => result[n - 1]?.single_label);
+    if (locked) {
+      throw new Error(`A palete ${locked} é uma palete completa: altere-a em «Paletes completas».`);
+    }
     if (edit.type === "resize_pallet") {
       const index = edit.pallet_number - 1;
       const size = PALLET_SIZES.find((candidate) => candidate.name === edit.size)!;
@@ -667,7 +682,7 @@ function applyPlanEdits(pallets: PalletResult[], edits: PlanEdit[]): PalletResul
 function planBlockingErrors(pallets: PalletResult[], selection: PlanSelection): string[] {
   if (selection !== "split") return [];
   return pallets.flatMap((pallet, index) =>
-    isMixedPallet(pallet) && referenceCount(pallet) > 8
+    !pallet.single_label && isMixedPallet(pallet) && referenceCount(pallet) > 8
       ? [`A opção B não permite a palete ${index + 1} com ${referenceCount(pallet)} referências. Reveja a movimentação da loja.`]
       : []
   );
@@ -911,6 +926,50 @@ Deno.serve(async (req) => {
     for (const i of items) expectedBoxesByLine.set(i.order_line_id, i.boxes);
     const expectedTotal = totalBoxes(items);
 
+    // ── Paletes completas definidas pelo administrador (1 SOC e 1 etiqueta cada) ──
+    // As caixas escolhidas saem primeiro; o resto segue as regras normais.
+    const { data: fullPalletRows, error: fullPalletsError } = await supabase
+      .from("order_full_pallets")
+      .select("position, store_code, lines")
+      .eq("order_id", order_id)
+      .order("position");
+    if (fullPalletsError) throw new Error(`Falha a ler as paletes completas: ${fullPalletsError.message}`);
+    const fullPalletDefs = (fullPalletRows || []) as FullPalletRow[];
+    const fullPallets: PalletResult[] = [];
+    for (const def of fullPalletDefs) {
+      const store = String(def.store_code || "").trim();
+      const group: WorkItem[] = [];
+      for (const line of Array.isArray(def.lines) ? def.lines : []) {
+        const item = items.find((i) => i.order_line_id === line.order_line_id && i.store_code === store);
+        const wanted = Math.floor(Number(line.boxes) || 0);
+        if (!item || wanted < 1) continue;
+        const take = Math.min(wanted, item.boxes);
+        if (take < wanted) {
+          globalWarnings.push(
+            `Palete completa ${def.position} (loja ${store}): artigo ${item.article_code} só tem ${item.boxes} caixa(s) disponíveis`,
+          );
+        }
+        if (take < 1) continue;
+        item.boxes -= take;
+        group.push({ ...item, boxes: take });
+      }
+      if (group.length === 0) {
+        globalWarnings.push(`Palete completa ${def.position} (loja ${store}) ignorada: artigos já não existem na encomenda`);
+        continue;
+      }
+      group.sort((a, b) => b.lg_num - a.lg_num || a.line_number - b.line_number);
+      const packed = packGroup(group);
+      if (packed.length > 1) {
+        globalWarnings.push(
+          `Palete completa ${def.position} (loja ${store}) não cabe numa só palete: foram criadas ${packed.length} paletes completas`,
+        );
+      }
+      for (const p of packed) {
+        p.single_label = true;
+        fullPallets.push(p);
+      }
+    }
+
     // ── Agrupar por LG (desc) e aplicar a REGRA DAS 5 CAIXAS ──
     const lgKeys = [...new Set(items.map((i) => i.lg_code || ""))].sort(
       (a, b) => lgNumeric(b) - lgNumeric(a),
@@ -981,7 +1040,7 @@ Deno.serve(async (req) => {
     }
 
     // ── Ordenar paletes: LG mais alto primeiro ──
-    let allPallets = [...dedicated, ...mixedPallets];
+    let allPallets = [...fullPallets, ...dedicated, ...mixedPallets];
     const palletLgMax = (p: PalletResult) =>
       Math.max(...p.boxes.map((b) => lgNumeric(b.lg_code)), -1);
     allPallets.sort((a, b) => {
@@ -992,7 +1051,7 @@ Deno.serve(async (req) => {
       return sa - sb;
     });
     const requiresChoice = allPallets.some((pallet) =>
-      isMixedPallet(pallet) && referenceCount(pallet) > 8
+      !pallet.single_label && isMixedPallet(pallet) && referenceCount(pallet) > 8
     );
     if (selection === "split" && requiresChoice) {
       allPallets = splitMixedPallets(allPallets);
@@ -1044,7 +1103,7 @@ Deno.serve(async (req) => {
     }
     for (const [index, p] of allPallets.entries()) {
       const lgs = [...new Set(p.boxes.map((b) => b.lg_code || ""))];
-      if (lgs.length > 1) {
+      if (lgs.length > 1 && !p.single_label) {
         for (const lg of lgs) {
           const n = p.boxes.filter((b) => (b.lg_code || "") === lg).length;
           if (n > MIXED_MAX_BOXES_PER_LG) {
@@ -1096,7 +1155,7 @@ Deno.serve(async (req) => {
       }
 
       const articleReferences = new Set(p.boxes.map((b) => b.article_code));
-      if ((lgs.length > 1 || new Set(p.boxes.map((b) => b.store_code)).size > 1) && articleReferences.size > 8) {
+      if (!p.single_label && (lgs.length > 1 || new Set(p.boxes.map((b) => b.store_code)).size > 1) && articleReferences.size > 8) {
         p.warnings.push(
           `Palete ${index + 1} tem ${articleReferences.size} referências (limite recomendado: 8)`,
         );
@@ -1133,6 +1192,7 @@ Deno.serve(async (req) => {
         }
         if (redone && redone.boxes.length === p.boxes.length) {
           redone.warnings = [...new Set([...p.warnings, ...redone.warnings])];
+          redone.single_label = p.single_label;
           allPallets[idx] = redone;
           errs = validatePallet(redone);
         }
@@ -1167,6 +1227,7 @@ Deno.serve(async (req) => {
         total_layers: p.layers,
         total_pieces: pieces,
         is_mixed: isMixed,
+        single_label: p.single_label === true,
         base_usage_pct: p.base_usage_pct,
         warnings: p.warnings,
         boxes: p.boxes.map((b) => ({
@@ -1190,7 +1251,7 @@ Deno.serve(async (req) => {
     });
 
     const digestInput = JSON.stringify({
-      order_id, selection, edits, palletPayload,
+      order_id, selection, edits, palletPayload, full_pallets: fullPalletDefs,
       order_lines: [...(orderLines as OrderLineRow[])].sort((a, b) => a.id.localeCompare(b.id)),
       article_specs: [...specByCode].sort(([a], [b]) => a.localeCompare(b)),
     });
@@ -1224,6 +1285,7 @@ Deno.serve(async (req) => {
             total_boxes: p.boxes.length,
             total_pieces: p.boxes.reduce((sum, box) => sum + box.pieces, 0),
             is_mixed: isMixedPallet(p),
+            single_label: p.single_label === true,
             base_usage_pct: p.base_usage_pct,
             lg_codes: [...new Set(p.boxes.map((box) => box.lg_code).filter(Boolean))],
             store_codes: [...new Set(p.boxes.map((box) => box.store_code).filter(Boolean))],
@@ -1319,6 +1381,7 @@ Deno.serve(async (req) => {
         total_boxes: saved.total_boxes,
         total_pieces: pieces,
         is_mixed: isMixed,
+        single_label: p.single_label === true,
         lg_codes: lgs,
         store_codes: stores,
         containers: saved.containers,
