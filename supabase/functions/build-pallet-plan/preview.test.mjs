@@ -165,12 +165,44 @@ test("poucas caixas de vários tamanhos ficam numa só camada, sem torre", () =>
   assertFlatNoTowers(pallet);
 });
 
-test("caixas do mesmo artigo ficam juntas (lado a lado) na camada", () => {
+function touching(a, b) {
+  const sameZ = a.pos_z === b.pos_z;
+  const xTouch = a.pos_x + a.box_l === b.pos_x || b.pos_x + b.box_l === a.pos_x;
+  const yTouch = a.pos_y + a.box_w === b.pos_y || b.pos_y + b.box_w === a.pos_y;
+  const xOver = a.pos_x < b.pos_x + b.box_l && b.pos_x < a.pos_x + a.box_l;
+  const yOver = a.pos_y < b.pos_y + b.box_w && b.pos_y < a.pos_y + a.box_w;
+  return sameZ && ((xTouch && yOver) || (yTouch && xOver));
+}
+
+function connected(boxes) {
+  const seen = new Set([0]);
+  const queue = [0];
+  while (queue.length) {
+    const i = queue.pop();
+    boxes.forEach((b, j) => {
+      if (!seen.has(j) && touching(boxes[i], b)) { seen.add(j); queue.push(j); }
+    });
+  }
+  return seen.size === boxes.length;
+}
+
+test("caixas do mesmo artigo ficam juntas (encostadas) na camada", () => {
   const pallet = packPallet(sizes[1], [item(1, 4, 400, 300, 250), item(2, 4, 400, 300, 250, { store: "651" })]);
   const first = layersOf(pallet)[0];
-  const seq = first.sort((a, b) => a.placement_sequence - b.placement_sequence).map((b) => b.article_code);
-  // A1 A1 A1 A1 A2 A2 A2 A2 — nunca intercalados
-  assert.equal(seq.join(","), "A1,A1,A1,A1,A2,A2,A2,A2");
+  assert.ok(connected(first.filter((b) => b.article_code === "A1")), "A1 separadas");
+  assert.ok(connected(first.filter((b) => b.article_code === "A2")), "A2 separadas");
+});
+
+test("sem espaços no meio: as caixas de cada camada estão todas encostadas", () => {
+  const pallet = packPallet(sizes[0], [
+    item(1, 2, 300, 290, 280), item(2, 2, 430, 410, 290, { lg: "LG90", lgNum: 90 }),
+    item(3, 2, 280, 260, 290, { lg: "LG80", lgNum: 80 }),
+  ]);
+  for (const layer of layersOf(pallet)) {
+    const base = layer.filter((b) => b.pos_z === layer[0].pos_z);
+    assert.ok(connected(base), "há caixas soltas com espaço no meio");
+  }
+  assertFlatNoTowers(pallet);
 });
 
 test("nunca se empilha sobre uma camada pequena: o resto fica para outra palete", () => {

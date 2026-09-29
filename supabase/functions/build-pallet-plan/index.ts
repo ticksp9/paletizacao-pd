@@ -12,10 +12,11 @@ const MAX_PHYSICAL_HEIGHT_MM = 1800;
 const PALLET_BASE_HEIGHT_MM = 150;
 const DEFAULT_BOX_MM = { l: 400, w: 300, h: 300 };
 const MIXED_MAX_BOXES_PER_LG = 5; // regra das 5 caixas
-const SUPPORT_RATIO = 0.7; // apoio mínimo da base sobre caixas inferiores
+const SUPPORT_RATIO = 0.9; // apoio mínimo por baixo de cada caixa (loiça: quase total)
 const LAYER_TOLERANCE_MM = 20; // diferença máxima de altura entre caixas da mesma camada
 const LG_PRIORITY_MIN_COVERAGE = 0.9; // camadas aceites para a regra dos LG: ≥90% da melhor cobertura
-const MIN_STACK_COVERAGE = 0.5; // só se empilha sobre camadas que cubram pelo menos metade da base
+const MIN_STACK_COVERAGE = 0.7; // só se empilha sobre camadas que cubram 70% da base (sem degraus nem torres)
+const MIN_COMPACTNESS = 0.93; // caixas encostadas: espaço vazio só na borda, nunca no meio
 const PALLET_HEIGHT_LIMIT_MM: Record<string, number> = {
   "120x80": 1800,
   "60x80": 1250,
@@ -184,18 +185,19 @@ function fitsAnywhere(spec: BoxSpec, size: PalletSize): boolean {
 }
 
 // ── Montagem por camadas planas ───────────────────────────────
-// Loiça é frágil: a palete é montada em camadas completas e niveladas, sem torres.
-//  * Cada camada usa caixas da mesma altura (diferença até LAYER_TOLERANCE_MM), por isso o
-//    topo de cada camada fica plano e a camada seguinte assenta por igual.
-//  * Em cada altura possível experimenta-se encher a camada; fica a que cobre mais base,
-//    dando prioridade ao LG mais alto (regra dos LG).
-//  * Dentro da camada as caixas seguem a regra do caracol (à volta, de fora para dentro);
-//    se em filas couberem mais caixas, usam-se filas (a palete fica mais cheia e firme).
+// Loiça é frágil: no camião nada pode bater. A palete é montada em camadas completas e
+// niveladas, com as caixas encostadas umas às outras.
+//  * Cada camada usa caixas da mesma altura (diferença até LAYER_TOLERANCE_MM): o topo fica plano.
+//  * As caixas são encostadas a partir de um canto (em filas ou em colunas). O espaço que
+//    sobra fica junto à borda, nunca no meio (MIN_COMPACTNESS).
+//  * Cada caixa tem apoio quase total por baixo (SUPPORT_RATIO).
+//  * Só se empilha sobre camadas quase completas (MIN_STACK_COVERAGE): não há degraus nem torres.
+//    A camada de cima pode ser incompleta; o resto vai para outra palete.
+//  * Duas caixas baixas podem ir uma em cima da outra (a de cima mais pequena, bem apoiada)
+//    para a coluna ficar à altura da camada, por exemplo 130 + 150 ao lado de caixas de 290.
+//  * Entre as camadas possíveis fica a que dá prioridade ao LG mais alto (regra dos LG).
+//  * A ordem de colocação dentro da camada segue a regra do caracol (à volta, de fora para dentro).
 //  * As caixas podem rodar (qualquer face para baixo), sempre dentro da palete.
-//  * As caixas do mesmo artigo (e da mesma loja/LG) são postas seguidas, lado a lado.
-//  * Só se empilha sobre uma camada que cubra pelo menos MIN_STACK_COVERAGE da base.
-//    Uma camada mais pequena é sempre a última (topo); o resto vai para outra palete.
-//  * Na última camada (nada vai por cima), os espaços livres levam as caixas que sobram.
 
 interface Rect {
   x: number;
@@ -211,6 +213,8 @@ interface LayerPlacement {
   x: number;
   y: number;
   o: Orient;
+  /** Altura a que a caixa assenta dentro da camada (caixa de cima de uma coluna de duas). */
+  dz?: number;
 }
 
 interface LayerFill {
@@ -276,7 +280,8 @@ function fillLayer(
   existing: Rect[],
   weightBudgetKg: number,
   rotatedFirst: boolean,
-  spiral = true,
+  columns = false,
+  withPairs = false,
 ): LayerFill {
   const rects: Rect[] = [...existing];
   const placements: LayerPlacement[] = [];
@@ -303,16 +308,13 @@ function fillLayer(
 
     while (count > 0) {
       if (weightKg + boxWeight > weightBudgetKg) break;
-      // Regra do caracol: o ponto livre mais adiantado na volta à palete. As caixas do
-      // mesmo artigo são postas seguidas, por isso ficam juntas.
+      // Encostar a partir do canto: em filas (frente para trás) ou em colunas (esquerda para
+      // a direita). As caixas do mesmo artigo são postas seguidas, por isso ficam juntas.
       let chosen: { x: number; y: number; o: Orient; rank: [number, number, number, number] } | null = null;
       for (const p of points) {
         for (const o of opts) {
           if (p.x + o.l > size.length || p.y + o.w > size.width) continue;
-          // Sem caracol: filas da frente para trás, da esquerda para a direita.
-          const rank: [number, number, number, number] = spiral
-            ? clockwiseSpiralRank(size, p, o)
-            : [0, p.y, p.x, 0];
+          const rank: [number, number, number, number] = columns ? [p.x, p.y, 0, 0] : [p.y, p.x, 0, 0];
           if (chosen && compareRank(rank, chosen.rank) >= 0) continue;
           if (rects.some((r) => overlapArea(p.x, p.y, o.l, o.w, r) > 0)) continue;
           if (z > 0) {
@@ -339,7 +341,143 @@ function fillLayer(
     }
     left.set(item, count);
   }
+
+  // Colunas de duas caixas baixas (a de cima com a base dentro da de baixo) que juntas
+  // ficam com a altura da camada.
+  const pairOptions: Array<{ a: WorkItem; oa: Orient; b: WorkItem; ob: Orient }> = [];
+  const seenPairs = new Set<string>();
+  for (const a of withPairs ? items : []) {
+    if ((left.get(a) ?? 0) <= 0) continue;
+    for (const oa of orientations(a.spec)) {
+      if (oa.h >= minH || oa.l > size.length || oa.w > size.width) continue;
+      for (const b of items) {
+        if ((left.get(b) ?? 0) <= (b === a ? 1 : 0)) continue;
+        for (const ob of orientations(b.spec)) {
+          const total = oa.h + ob.h;
+          if (total < minH || total > maxH || z + total > usableHeight(size)) continue;
+          if (ob.l > oa.l || ob.w > oa.w) continue;
+          const key = `${items.indexOf(a)}:${oa.label}:${items.indexOf(b)}:${ob.label}`;
+          if (seenPairs.has(key)) continue;
+          seenPairs.add(key);
+          pairOptions.push({ a, oa, b, ob });
+        }
+      }
+    }
+  }
+  // Primeiro as colunas que cobrem mais base e cuja caixa de cima tapa melhor a de baixo.
+  pairOptions.sort((p1, p2) =>
+    p2.ob.l * p2.ob.w - p1.ob.l * p1.ob.w || p2.oa.l * p2.oa.w - p1.oa.l * p1.oa.w
+  );
+  for (let guard = 0; guard < 200 && pairOptions.length > 0; guard++) {
+    let chosen: { x: number; y: number; a: WorkItem; oa: Orient; b: WorkItem; ob: Orient; rank: number[] } | null = null;
+    for (const { a, oa, b, ob } of pairOptions) {
+      if ((left.get(a) ?? 0) <= 0 || (left.get(b) ?? 0) <= (b === a ? 1 : 0)) continue;
+      const pairWeight = (a.spec.weight_kg ?? 0) + (b.spec.weight_kg ?? 0);
+      if (weightKg + pairWeight > weightBudgetKg) continue;
+      for (const p of points) {
+        if (p.x + oa.l > size.length || p.y + oa.w > size.width) continue;
+        const rank = columns ? [p.x, p.y] : [p.y, p.x];
+        if (chosen && (rank[0] > chosen.rank[0] || (rank[0] === chosen.rank[0] && rank[1] >= chosen.rank[1]))) continue;
+        if (rects.some((r) => overlapArea(p.x, p.y, oa.l, oa.w, r) > 0)) continue;
+        if (z > 0) {
+          const support = below.reduce((sum, r) => sum + overlapArea(p.x, p.y, oa.l, oa.w, r), 0);
+          if (support < oa.l * oa.w * SUPPORT_RATIO) continue;
+        }
+        chosen = { x: p.x, y: p.y, a, oa, b, ob, rank };
+      }
+      if (chosen) break; // a melhor coluna que cabe; a posição é a mais encostada ao canto
+    }
+    if (!chosen) break;
+    const { x, y, a, oa, b, ob } = chosen;
+    const total = oa.h + ob.h;
+    rects.push({ x, y, l: oa.l, w: oa.w, h: total, top: z + total });
+    placements.push({ item: a, x, y, o: oa, dz: 0 });
+    placements.push({ item: b, x, y, o: ob, dz: oa.h });
+    left.set(a, (left.get(a) ?? 0) - 1);
+    left.set(b, (left.get(b) ?? 0) - 1);
+    points = points.filter((q) => !(q.x === x && q.y === y));
+    for (const c of [{ x: x + oa.l, y }, { x, y: y + oa.w }]) {
+      if (c.x < size.length && c.y < size.width && !points.some((q) => q.x === c.x && q.y === c.y)) {
+        points.push(c);
+      }
+    }
+    fullArea += ob.l * ob.w;
+    height = Math.max(height, total);
+    weightKg += (a.spec.weight_kg ?? 0) + (b.spec.weight_kg ?? 0);
+  }
   return { placements, fullArea, height, weightKg };
+}
+
+/** Área coberta / área do retângulo que envolve as caixas (1 = sem buracos no meio). */
+function compactness(all: LayerPlacement[]): number {
+  const placements = all.filter((p) => !p.dz);
+  if (placements.length === 0) return 0;
+  const minX = Math.min(...placements.map((p) => p.x));
+  const minY = Math.min(...placements.map((p) => p.y));
+  const maxX = Math.max(...placements.map((p) => p.x + p.o.l));
+  const maxY = Math.max(...placements.map((p) => p.y + p.o.w));
+  const area = placements.reduce((sum, p) => sum + p.o.l * p.o.w, 0);
+  return area / ((maxX - minX) * (maxY - minY));
+}
+
+interface StackedPlacement extends LayerPlacement {
+  z: number;
+}
+
+/**
+ * Camada de cima: põe caixas baixas por cima de outras caixas baixas da mesma camada,
+ * para que a coluna fique à altura da camada (nunca mais alta).
+ */
+function stackLowBoxes(
+  size: PalletSize,
+  items: WorkItem[],
+  left: Map<WorkItem, number>,
+  layer: StackedPlacement[],
+  layerTop: number,
+  weightBudgetKg: number,
+): { placements: StackedPlacement[]; weightKg: number } {
+  const added: StackedPlacement[] = [];
+  let weightKg = 0;
+  let placed = true;
+  while (placed) {
+    placed = false;
+    const all = [...layer, ...added];
+    // Superfícies baixas onde ainda cabe uma caixa por cima.
+    const bases = all
+      .map((p) => ({ p, top: p.z + p.o.h }))
+      .filter(({ top }) => top < layerTop - LAYER_TOLERANCE_MM);
+    for (const item of items) {
+      if ((left.get(item) ?? 0) <= 0) continue;
+      const boxWeight = item.spec.weight_kg ?? 0;
+      if (weightKg + boxWeight > weightBudgetKg) continue;
+      for (const { p: base, top } of bases) {
+        for (const o of orientations(item.spec)) {
+          if (top + o.h > layerTop || top + o.h < layerTop - LAYER_TOLERANCE_MM) continue;
+          const x = base.x;
+          const y = base.y;
+          if (x + o.l > size.length || y + o.w > size.width) continue;
+          const collides = all.some((q) =>
+            x < q.x + q.o.l && x + o.l > q.x && y < q.y + q.o.w && y + o.w > q.y &&
+            top < q.z + q.o.h && top + o.h > q.z
+          );
+          if (collides) continue;
+          const support = all
+            .filter((q) => q.z + q.o.h === top)
+            .reduce((sum, q) =>
+              sum + overlapArea(x, y, o.l, o.w, { x: q.x, y: q.y, l: q.o.l, w: q.o.w, h: q.o.h, top }), 0);
+          if (support < o.l * o.w * SUPPORT_RATIO) continue;
+          added.push({ item, x, y, o, z: top });
+          left.set(item, (left.get(item) ?? 0) - 1);
+          weightKg += boxWeight;
+          placed = true;
+          break;
+        }
+        if (placed) break;
+      }
+      if (placed) break;
+    }
+  }
+  return { placements: added, weightKg };
 }
 
 /** Empilha os itens da fila numa palete, camada a camada; consome item.boxes. */
@@ -366,16 +504,16 @@ function packPallet(size: PalletSize, queue: WorkItem[]): PalletResult | null {
         ? orientations(item.spec).filter((o) => z + o.h <= usableHeight(size)).map((o) => o.h)
         : []
     ))].sort((a, b) => a - b); // mais baixa primeiro: em empate fica a caixa deitada
-    const fills: Array<{ fill: LayerFill; maxH: number; spiral: boolean }> = [];
+    const fills: Array<{ fill: LayerFill; maxH: number; compact: number; columns: boolean; rotatedFirst: boolean }> = [];
     for (const h of heights) {
-      for (const spiral of [true, false]) {
+      for (const columns of [false, true]) {
         for (const rotatedFirst of [false, true]) {
           const fill = fillLayer(
             size, items, remaining, z, h - LAYER_TOLERANCE_MM, h, below, [], weightLimit - weightKg,
-            rotatedFirst, spiral,
+            rotatedFirst, columns,
           );
           if (fill.placements.length === 0) continue;
-          fills.push({ fill, maxH: h, spiral });
+          fills.push({ fill, maxH: h, compact: compactness(fill.placements), columns, rotatedFirst });
         }
       }
     }
@@ -391,37 +529,65 @@ function packPallet(size: PalletSize, queue: WorkItem[]): PalletResult | null {
     const lgVector = (fill: LayerFill) => lgOrder.map((lg) => fill.placements
       .filter((p) => p.item.lg_num === lg)
       .reduce((sum, p) => sum + p.o.l * p.o.w, 0));
-    const best = fills
-      .filter((f) => f.fill.fullArea >= maxArea * LG_PRIORITY_MIN_COVERAGE)
+    // Caixas encostadas primeiro: só se aceitam camadas sem buracos no meio (ou, se nenhuma
+    // o conseguir, as mais compactas).
+    const wide = fills.filter((f) => f.fill.fullArea >= maxArea * LG_PRIORITY_MIN_COVERAGE);
+    const bestCompact = Math.max(...wide.map((f) => f.compact));
+    const best = wide
+      .filter((f) => f.compact >= Math.min(MIN_COMPACTNESS, bestCompact - 0.001))
       .map((f) => ({ ...f, vector: lgVector(f.fill) }))
       .sort((a, b) => {
         for (let i = 0; i < a.vector.length; i++) {
           if (a.vector[i] !== b.vector[i]) return b.vector[i] - a.vector[i];
         }
-        // Mais base coberta; depois o caracol (como os operadores montam); depois mais caixas.
         return b.fill.fullArea - a.fill.fullArea ||
-          Number(b.spiral) - Number(a.spiral) ||
+          b.compact - a.compact ||
           b.fill.placements.length - a.fill.placements.length;
       })[0];
 
+    // Só para a camada escolhida: completar com colunas de duas caixas baixas (mais rápido
+    // do que experimentar em todas as hipóteses).
+    if (best.fill.fullArea < baseArea) {
+      const withPairs = fillLayer(
+        size, items, remaining, z, best.maxH - LAYER_TOLERANCE_MM, best.maxH, below, [], weightLimit - weightKg,
+        best.rotatedFirst, best.columns, true,
+      );
+      if (withPairs.fullArea > best.fill.fullArea && compactness(withPairs.placements) >= Math.min(MIN_COMPACTNESS, best.compact)) {
+        best.fill = withPairs;
+      }
+    }
     const coverage = best.fill.fullArea / baseArea;
     const lastLayer = coverage < MIN_STACK_COVERAGE;
-    let placements = best.fill.placements;
+    let placements: StackedPlacement[] = best.fill.placements.map((p) => ({ ...p, z: z + (p.dz ?? 0) }));
     let layerWeight = best.fill.weightKg;
+    let layerHeight = best.fill.height;
     if (lastLayer) {
-      // Camada de topo (nada vai por cima): os espaços livres levam as caixas que sobram.
+      // Camada de cima (nada vai por cima): os espaços junto às caixas levam as que sobram,
+      // desde que não fiquem mais altas do que a camada.
       const used = new Map(remaining);
       for (const p of placements) used.set(p.item, (used.get(p.item) ?? 0) - 1);
-      const existing = placements.map((p) => ({
+      const existing = placements.filter((p) => p.z === z).map((p) => ({
         x: p.x, y: p.y, l: p.o.l, w: p.o.w, h: p.o.h, top: z + p.o.h,
       }));
       const filler = fillLayer(
-        size, items, used, z, 1, usableHeight(size) - z, below, existing,
+        size, items, used, z, 1, best.maxH, below, existing,
         weightLimit - weightKg - layerWeight, false,
       );
-      placements = [...placements, ...filler.placements];
+      for (const p of filler.placements) used.set(p.item, (used.get(p.item) ?? 0) - 1);
+      placements = [...placements, ...filler.placements.map((p) => ({ ...p, z: z + (p.dz ?? 0) }))];
       layerWeight += filler.weightKg;
+      layerHeight = Math.max(layerHeight, filler.height);
+      // Caixas baixas umas em cima das outras, para ficarem à altura da camada.
+      const stacked = stackLowBoxes(
+        size, items, used, placements, z + layerHeight, weightLimit - weightKg - layerWeight,
+      );
+      placements = [...placements, ...stacked.placements];
+      layerWeight += stacked.weightKg;
     }
+    // Ordem de colocação: regra do caracol (à volta da palete, de fora para dentro), de baixo para cima.
+    placements.sort((a, b) =>
+      a.z - b.z || compareRank(clockwiseSpiralRank(size, a, a.o), clockwiseSpiralRank(size, b, b.o))
+    );
 
     layer += 1;
     let sequence = 0;
@@ -445,7 +611,7 @@ function packPallet(size: PalletSize, queue: WorkItem[]): PalletResult | null {
         placement_sequence: sequence,
         pos_x: p.x,
         pos_y: p.y,
-        pos_z: z,
+        pos_z: p.z,
         box_l: p.o.l,
         box_w: p.o.w,
         box_h: p.o.h,
@@ -454,11 +620,11 @@ function packPallet(size: PalletSize, queue: WorkItem[]): PalletResult | null {
         rotated: p.o.label !== "CxLxA",
         pieces: p.item.spec.pieces_per_box,
       });
-      layerRects.push({ x: p.x, y: p.y, l: p.o.l, w: p.o.w, h: p.o.h, top: z + p.o.h });
+      layerRects.push({ x: p.x, y: p.y, l: p.o.l, w: p.o.w, h: p.o.h, top: p.z + p.o.h });
     }
     weightKg += layerWeight;
     // Só as caixas com a altura da camada servem de apoio à camada seguinte.
-    const layerTop = z + best.fill.height;
+    const layerTop = z + layerHeight;
     below = layerRects.filter((r) => r.top >= layerTop - LAYER_TOLERANCE_MM);
     z = layerTop;
     if (lastLayer) break;
