@@ -47,3 +47,9 @@ gera etiquetas SOC (PDF/ZPL) e o DESADV CSV (CD 802). Utilizador fala português
 | Utilizadores, histórico, manutenção | sim | não | não |
 Contas novas ficam sempre "pendente" (o registo nunca define o papel). Palavra-passe dada pelo admin é
 temporária (`must_change_password`) e é trocada em /definir-password no primeiro acesso.
+
+## Página simples da encomenda (30/09)
+- `/orders/:id` = OrderPage: 3 passos (Fazer paletes → Emitir etiquetas → Criar ficheiro) + «Mais opções».
+- A página antiga com todas as opções ficou em `/orders/:id/avancado` (PalletizationPage).
+- Ações partilhadas em `app/src/lib/orderActions.ts`; paletes via `lib/redoOrder.ts`.
+- Utilizadores não técnicos: manter tudo o que é raro dentro de «Mais opções».

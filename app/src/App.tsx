@@ -13,6 +13,7 @@ import SetPasswordPage from "./pages/SetPasswordPage";
 import ImportEDIPage from "./pages/ImportEDIPage";
 import OrdersPage from "./pages/OrdersPage";
 import PalletizationPage from "./pages/PalletizationPage";
+import OrderPage from "./pages/OrderPage";
 import LabelsPage from "./pages/LabelsPage";
 import ArticlesPage from "./pages/ArticlesPage";
 import ImportArticlesPage from "./pages/ImportArticlesPage";
@@ -41,7 +42,8 @@ const AppRoutes = () => {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/import" element={<ImportEDIPage />} />
           <Route path="/orders" element={<OrdersPage />} />
-          <Route path="/orders/:orderId" element={<PalletizationPage />} />
+          <Route path="/orders/:orderId" element={<OrderPage />} />
+          <Route path="/orders/:orderId/avancado" element={<PalletizationPage />} />
           <Route path="/palletization" element={<OrdersPage />} />
           <Route path="/paletizacao/:orderId/palete/:palletNumber/3d" element={<Pallet3DPage />} />
           <Route path="/labels" element={<LabelsPage />} />

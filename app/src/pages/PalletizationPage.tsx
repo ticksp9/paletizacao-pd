@@ -789,7 +789,7 @@ export default function PalletizationPage() {
               Eliminar
             </IndustrialButton>
           )}
-          <IndustrialButton variant="ghost" onClick={() => navigate('/orders')} icon={<ArrowLeft className="w-5 h-5" />}>
+          <IndustrialButton variant="ghost" onClick={() => navigate(`/orders/${order.id}`)} icon={<ArrowLeft className="w-5 h-5" />}>
             Voltar
           </IndustrialButton>
         </div>
@@ -1511,7 +1511,7 @@ export default function PalletizationPage() {
 
             {!hasPreviewOptions && !desadvReadOnly && (
               <div className="mt-8 flex justify-center">
-                <IndustrialButton variant="primary" size="xl" onClick={() => navigate('/labels')} icon={<CheckCircle2 className="w-6 h-6" />}>
+                <IndustrialButton variant="primary" size="xl" onClick={() => navigate(`/orders/${order.id}`)} icon={<CheckCircle2 className="w-6 h-6" />}>
                   Confirmar e Gerar Etiquetas
                 </IndustrialButton>
               </div>

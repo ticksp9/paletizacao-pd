@@ -56,9 +56,8 @@ function greeting(): string {
 }
 
 function orderLink(order: DashboardOrder): string {
-  if (order.stage === 'paletizar') return `/orders/${order.id}`;
-  if (order.stage === 'concluida' || order.stage === 'enviada') return `/orders/${order.id}`;
-  return `/labels?order=${order.id}`;
+  // Todas as encomendas abrem na página simples (3 passos).
+  return `/orders/${order.id}`;
 }
 
 function Progress({ step }: { step: number }) {

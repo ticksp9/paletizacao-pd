@@ -935,7 +935,9 @@ export default function LabelsPage() {
                       <Tag className="w-7 h-7 text-primary" />
                     </div>
                     <div>
-                      <h3 className="text-lg font-bold text-foreground">{order.order_number}</h3>
+                      <h3 className="text-lg font-bold text-foreground">
+                        <Link to={`/orders/${order.id}`} className="hover:text-primary hover:underline">{order.order_number}</Link>
+                      </h3>
                       <p className="text-muted-foreground">{order.customer_name}</p>
                       <p className="text-xs text-muted-foreground mt-0.5">
                         Armazém: <span className="font-mono font-medium">{order.store_code || '—'}</span>
