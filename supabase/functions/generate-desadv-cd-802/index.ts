@@ -350,7 +350,12 @@ function validateBuiltRecords(
   return errors;
 }
 
-Deno.serve(async (req) => {
+interface HeldReservation {
+  orderId: string | null;
+  token: string | null;
+}
+
+async function handleRequest(req: Request, held: HeldReservation): Promise<Response> {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   let currentStep = "init";
@@ -432,6 +437,8 @@ Deno.serve(async (req) => {
     if (reservationError || !reservationToken) {
       throw new Error(`Falha ao reservar o plano para emissão: ${reservationError?.message || "token não recebido"}`);
     }
+    held.orderId = order_id;
+    held.token = String(reservationToken);
 
     currentStep = "load_order";
     console.log("DESADV step:", currentStep, { order_id });
@@ -1135,4 +1142,25 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
+}
+
+// Se a emissão falhar depois de reservar o plano, a reserva é libertada logo; senão a
+// encomenda ficava bloqueada e não se podia voltar a fazer as paletes (erro de 30/09).
+// Depois de uma emissão bem feita a reserva já não existe e isto não faz nada.
+Deno.serve(async (req) => {
+  const held: HeldReservation = { orderId: null, token: null };
+  const response = await handleRequest(req, held);
+  if (held.orderId && held.token) {
+    try {
+      const client = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+      const { error } = await client.rpc("cancel_plan_issuance", {
+        p_order_id: held.orderId,
+        p_token: held.token,
+      });
+      if (error) console.error("Falha a libertar a reserva de emissão:", error.message);
+    } catch (error) {
+      console.error("Falha a libertar a reserva de emissão:", error);
+    }
+  }
+  return response;
 });
