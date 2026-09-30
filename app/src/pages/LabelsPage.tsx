@@ -209,6 +209,8 @@ export default function LabelsPage() {
   const [dedicatedMode, setDedicatedMode] = useState<DedicatedLabelMode>('pallet');
   const [guideOrder, setGuideOrder] = useState<OrderWithLgs | null>(null);
   const [guideValue, setGuideValue] = useState('');
+  // Guias já usadas noutras encomendas (para avisar de números repetidos).
+  const [usedGuides, setUsedGuides] = useState<Map<string, string>>(new Map());
   const [guideDeliveryDate, setGuideDeliveryDate] = useState('');
   const [guidePlanWarnings, setGuidePlanWarnings] = useState<GuidePlanWarning[]>([]);
   const [guideWarningsLoading, setGuideWarningsLoading] = useState(false);
@@ -471,8 +473,23 @@ export default function LabelsPage() {
     setIssueDialog(null);
   };
 
-  const askTransportGuide = (order: OrderWithLgs): Promise<GuideAnswer | null> => {
-    const last = localStorage.getItem(GUIDE_STORAGE_KEY);
+  const askTransportGuide = async (order: OrderWithLgs): Promise<GuideAnswer | null> => {
+    // Encomenda nova: sugere o maior número de guia já gravado (em qualquer encomenda,
+    // em qualquer computador) + 1. A mesma encomenda mantém o seu número.
+    const { data: guideRows } = await supabase
+      .from('orders')
+      .select('id, order_number, transport_guide')
+      .not('transport_guide', 'is', null);
+    const used = new Map<string, string>();
+    let maxNumeric: string | null = null;
+    for (const row of guideRows || []) {
+      const guide = String(row.transport_guide || '').trim();
+      if (!guide || row.id === order.id) continue;
+      used.set(guide, String(row.order_number));
+      if (/^\d+$/.test(guide) && (maxNumeric === null || Number(guide) > Number(maxNumeric))) maxNumeric = guide;
+    }
+    setUsedGuides(used);
+    const last = maxNumeric ?? localStorage.getItem(GUIDE_STORAGE_KEY);
     setGuideValue((order.transport_guide || '').trim() || suggestNextGuide(last));
     setGuideDeliveryDate((order.delivery_date || '').slice(0, 10));
     setGuidePlanWarnings([]);
@@ -492,6 +509,7 @@ export default function LabelsPage() {
 
   const guideTrimmed = guideValue.trim();
   const guideValid = GUIDE_PATTERN.test(guideTrimmed);
+  const guideUsedBy = guideTrimmed ? usedGuides.get(guideTrimmed) : undefined;
   const dateFormatOk = /^\d{4}-\d{2}-\d{2}$/.test(guideDeliveryDate);
   const orderDateStr = (guideOrder?.order_date || '').slice(0, 10);
   const dateTooEarly = dateFormatOk && !!orderDateStr && guideDeliveryDate < orderDateStr;
@@ -1274,6 +1292,14 @@ export default function LabelsPage() {
             />
             {guideTrimmed && !guideValid && (
               <p className="text-xs text-destructive">Use apenas dígitos, letras ou hífen (máx. 20 caracteres).</p>
+            )}
+            {guideUsedBy && (
+              <p className="text-sm font-medium text-destructive" role="alert">
+                Atenção: a guia {guideTrimmed} já foi usada na encomenda {guideUsedBy}. Cada encomenda deve ter um número diferente.
+              </p>
+            )}
+            {!guideUsedBy && guideTrimmed && (
+              <p className="text-xs text-muted-foreground">Número sugerido: a última guia gravada + 1. Pode alterar.</p>
             )}
 
             <div className="space-y-2 pt-2">

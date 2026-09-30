@@ -1183,14 +1183,23 @@ Deno.serve(async (req) => {
       }
       group.sort((a, b) => b.lg_num - a.lg_num || a.line_number - b.line_number);
       const packed = packGroup(group);
-      if (packed.length > 1) {
+      if (packed.length === 0) continue;
+      // Uma palete completa é UMA palete. Se as caixas escolhidas não couberem todas, fica
+      // completa a palete mais cheia e as caixas que sobram voltam às paletes normais
+      // (etiqueta por caixa) — erro de 30/09: as sobras saíam como "completas" de 1–2 caixas.
+      const full = packed.reduce((best, p) => (p.boxes.length > best.boxes.length ? p : best), packed[0]);
+      full.single_label = true;
+      fullPallets.push(full);
+      const extra = packed.filter((p) => p !== full).flatMap((p) => p.boxes);
+      if (extra.length > 0) {
+        for (const box of extra) {
+          const item = items.find((i) => i.order_line_id === box.order_line_id);
+          if (item) item.boxes += 1;
+        }
         globalWarnings.push(
-          `Palete completa ${def.position} (loja ${store}) não cabe numa só palete: foram criadas ${packed.length} paletes completas`,
+          `Palete completa ${def.position} (loja ${store}): só couberam ${full.boxes.length} caixas numa palete; ` +
+            `as outras ${extra.length} foram para as paletes normais, com etiqueta por caixa.`,
         );
-      }
-      for (const p of packed) {
-        p.single_label = true;
-        fullPallets.push(p);
       }
     }
 
