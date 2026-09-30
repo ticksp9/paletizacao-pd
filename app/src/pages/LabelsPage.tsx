@@ -45,13 +45,29 @@ async function openPdfForPrint(signedUrl: string) {
   };
 }
 
-async function openPdfInTab(signedUrl: string) {
+// Abrir o separador já, no próprio clique: se só abrir depois de esperar pelo servidor, o
+// browser bloqueia-o como pop-up e o PDF "não aparece".
+function openPendingTab(message: string): Window | null {
+  const tab = window.open('', '_blank');
+  tab?.document.write(`<p style="font-family:sans-serif;padding:2rem">${message}</p>`);
+  return tab;
+}
+
+async function openPdfInTab(signedUrl: string, tab: Window | null, filename: string) {
   const res = await fetch(signedUrl);
   if (!res.ok) throw new Error('Falha ao descarregar PDF');
   const blob = await res.blob();
   const blobUrl = URL.createObjectURL(blob);
-  window.open(blobUrl, '_blank', 'noopener');
-  setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+  if (tab && !tab.closed) {
+    tab.location.href = blobUrl;
+  } else {
+    // Se o browser não deixou abrir o separador, descarrega o PDF.
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = filename;
+    link.click();
+  }
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 300000);
 }
 
 interface PickingSheetResponse {
@@ -778,6 +794,7 @@ export default function LabelsPage() {
   ) => {
     const key = actionKey(order.id, 'picking');
     setBusyAction(key);
+    const tab = mode === 'view' ? openPendingTab('A preparar o mapa de conferência…') : null;
     try {
       const { data, error } = await supabase.functions.invoke<PickingSheetResponse>('generate-picking-sheet', {
         body: { order_id: order.id, mode: sheetMode },
@@ -796,7 +813,7 @@ export default function LabelsPage() {
       if (mode === 'print') {
         await openPdfForPrint(payload.pdf_url);
       } else {
-        await openPdfInTab(payload.pdf_url);
+        await openPdfInTab(payload.pdf_url, tab, `conferencia_${order.order_number}.pdf`);
       }
       if (payload.warnings?.length) {
         toast({
@@ -805,6 +822,7 @@ export default function LabelsPage() {
         });
       }
     } catch (err) {
+      tab?.close();
       toast({
         title: 'Mapa de conferência',
         description: err instanceof Error ? err.message : 'Sem dados para gerar o mapa de conferência.',
@@ -818,6 +836,7 @@ export default function LabelsPage() {
   const handleBuildSheet = async (order: OrderWithLgs, mode: 'view' | 'print') => {
     const key = actionKey(order.id, 'build-pdf');
     setBusyAction(key);
+    const tab = mode === 'view' ? openPendingTab('A preparar o PDF de montagem…') : null;
     try {
       const { data, error } = await supabase.functions.invoke<PickingSheetResponse>('generate-pallet-build-pdf', {
         body: { order_id: order.id },
@@ -836,9 +855,10 @@ export default function LabelsPage() {
       if (mode === 'print') {
         await openPdfForPrint(payload.pdf_url);
       } else {
-        await openPdfInTab(payload.pdf_url);
+        await openPdfInTab(payload.pdf_url, tab, `montagem_${order.order_number}.pdf`);
       }
     } catch (err) {
+      tab?.close();
       toast({
         title: 'Guia de montagem',
         description: err instanceof Error ? err.message : 'Erro ao gerar guia de montagem.',
@@ -1041,16 +1061,22 @@ export default function LabelsPage() {
                       Ver 3D
                     </IndustrialButton>
 
-                    {(hasZpl || hasPdf) && (
-                      <IndustrialButton
-                        variant="ghost"
-                        title="Criar ficheiro DESADV para enviar ao cliente"
-                        onClick={() => handleGenerateDesadv(order)}
-                        isLoading={isBusy(order.id, 'desadv')}
-                        icon={<FileSpreadsheet className="w-5 h-5" />}
-                      >
-                        Criar Ficheiro
-                      </IndustrialButton>
+                    <IndustrialButton
+                      variant="ghost"
+                      title={hasZpl || hasPdf
+                        ? 'Criar ficheiro DESADV para enviar ao cliente'
+                        : 'Emita primeiro as etiquetas; depois pode criar o ficheiro'}
+                      onClick={() => handleGenerateDesadv(order)}
+                      isLoading={isBusy(order.id, 'desadv')}
+                      disabled={!hasZpl && !hasPdf}
+                      icon={<FileSpreadsheet className="w-5 h-5" />}
+                    >
+                      Criar Ficheiro
+                    </IndustrialButton>
+                    {!hasZpl && !hasPdf && (
+                      <p className="basis-full text-xs text-muted-foreground">
+                        Para criar o ficheiro, emita primeiro as etiquetas (botão «Emitir etiquetas»).
+                      </p>
                     )}
                   </div>
                 </div>

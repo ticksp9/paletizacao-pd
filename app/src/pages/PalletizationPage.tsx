@@ -409,17 +409,22 @@ export default function PalletizationPage() {
   const handleBuildPdf = async () => {
     if (!order) return;
     setIsGeneratingPdf(true);
+    // Abrir o separador já, no próprio clique; senão o browser bloqueia-o e o PDF não aparece.
+    const tab = window.open('', '_blank');
+    tab?.document.write('<p style="font-family:sans-serif;padding:2rem">A preparar o PDF de montagem…</p>');
     try {
       const { data, error } = await supabase.functions.invoke('generate-pallet-build-pdf', {
         body: { order_id: order.id },
       });
       if (error) throw error;
       if (!data?.success) throw new Error(data?.error || 'Erro ao gerar o PDF de montagem');
-      window.open(data.pdf_url, '_blank', 'noopener');
+      if (tab && !tab.closed) tab.location.href = data.pdf_url;
+      else window.open(data.pdf_url, '_blank');
       if (data.warnings?.length) {
         toast({ title: 'Avisos', description: data.warnings.join(' · ') });
       }
     } catch (e) {
+      tab?.close();
       toast({ title: 'Erro', description: e instanceof Error ? e.message : 'Erro desconhecido', variant: 'destructive' });
     } finally {
       setIsGeneratingPdf(false);
