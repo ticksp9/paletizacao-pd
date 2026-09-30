@@ -2,7 +2,8 @@
 -- reservado; se a emissão falhava (ex.: encomenda sem paletes, ficheiro com erros) a reserva
 -- ficava e depois não se conseguia fazer as paletes.
 -- * cancel_plan_issuance: as funções libertam a sua reserva quando a emissão falha.
--- * replace_pallet_plan_atomic: reservas com mais de 10 minutos já não bloqueiam.
+-- * replace_pallet_plan_atomic: reservas com mais de 10 minutos já não bloqueiam; para o
+--   administrador nenhuma reserva bloqueia.
 -- Alteração aditiva: nada existente é apagado (só reservas antigas, que já não servem).
 
 CREATE OR REPLACE FUNCTION public.cancel_plan_issuance(p_order_id uuid, p_token uuid)
@@ -98,7 +99,20 @@ BEGIN
   IF v_block IS NOT NULL THEN RAISE EXCEPTION '%', v_block; END IF;
 
   -- Reservas com mais de 10 minutos são restos de emissões que falharam (uma emissão
-  -- demora segundos): apagam-se e não bloqueiam. As recentes bloqueiam sempre.
+  -- demora segundos): apagam-se e não bloqueiam. Para o administrador nenhuma reserva
+  -- bloqueia (pedido do utilizador, 30/09): é libertada e fica registada no histórico.
+  IF p_actor_user_id IS NOT NULL AND EXISTS (
+    SELECT 1 FROM public.user_roles ur
+    WHERE ur.user_id = p_actor_user_id AND ur.role = 'admin'
+  ) AND EXISTS (
+    SELECT 1 FROM public.pallet_plan_issuance_reservations r WHERE r.order_id = p_order_id
+  ) THEN
+    INSERT INTO public.operation_history (entity_type, entity_id, action, performed_by, details)
+    SELECT 'order', p_order_id, 'plan_issuance_reservation_released_by_admin', p_actor_user_id,
+           jsonb_build_object('token', r.token, 'reserved_at', r.reserved_at)
+    FROM public.pallet_plan_issuance_reservations r WHERE r.order_id = p_order_id;
+    DELETE FROM public.pallet_plan_issuance_reservations r WHERE r.order_id = p_order_id;
+  END IF;
   DELETE FROM public.pallet_plan_issuance_reservations r
   WHERE r.order_id = p_order_id AND r.reserved_at <= pg_catalog.now() - interval '10 minutes';
   IF EXISTS (
