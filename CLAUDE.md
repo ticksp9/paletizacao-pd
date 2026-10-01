@@ -53,3 +53,11 @@ temporária (`must_change_password`) e é trocada em /definir-password no primei
 - A página antiga com todas as opções ficou em `/orders/:id/avancado` (PalletizationPage).
 - Ações partilhadas em `app/src/lib/orderActions.ts`; paletes via `lib/redoOrder.ts`.
 - Utilizadores não técnicos: manter tudo o que é raro dentro de «Mais opções».
+
+## Mudanças de LG (01/10)
+- O Pingo Doce muda o LG de uma loja sem avisar. Tabela `store_lg_known` = LG conhecido por loja/armazém.
+- Se a encomenda traz um LG diferente para uma loja conhecida: etiquetas e ficheiro bloqueados (código
+  `LG_CHANGED`) até um administrador confirmar na página da encomenda (`confirm_order_lgs`).
+- Lojas novas não bloqueiam (`learn_order_lgs`). Não usar `pd_lg_locations` para isto: está desatualizada
+  para o armazém 5531 (serve só para o nome da loja nas etiquetas).
+

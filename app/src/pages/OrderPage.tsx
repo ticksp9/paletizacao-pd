@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { format } from 'date-fns';
 import {
-  ArrowLeft, Box, Boxes, CheckCircle2, ChevronDown, Download, FileSpreadsheet, FileText, Layers,
+  AlertTriangle, ArrowLeft, Box, Boxes, CheckCircle2, ChevronDown, Download, FileSpreadsheet, FileText, Layers,
   ListChecks, Loader2, Lock, MoreHorizontal, Printer, RotateCcw, Settings2, Tag, Trash2, Truck,
 } from 'lucide-react';
 import { MainLayout } from '@/components/layout/MainLayout';
@@ -46,7 +46,14 @@ interface LabelRow {
   pdf_storage_path: string | null;
 }
 
-type Busy = null | 'pallets' | 'labels' | 'file' | 'delivered' | 'pdf';
+type Busy = null | 'pallets' | 'labels' | 'file' | 'delivered' | 'pdf' | 'lg';
+
+interface LgChange {
+  warehouse_code: string;
+  store_code: string;
+  order_lg: string;
+  known_lgs: string;
+}
 
 const GUIDE_PATTERN = /^[A-Za-z0-9-]{1,20}$/;
 
@@ -103,6 +110,9 @@ export default function OrderPage() {
   const [delivered, setDelivered] = useState(false);
   const [blockReason, setBlockReason] = useState<string | null>(null);
   const [busy, setBusy] = useState<Busy>(null);
+  // Lojas cujo LG mudou em relação ao conhecido (o Pingo Doce muda sem avisar).
+  const [lgChanges, setLgChanges] = useState<LgChange[]>([]);
+  const [confirmLg, setConfirmLg] = useState(false);
 
   const [confirmRedo, setConfirmRedo] = useState(false);
   const [confirmDelivered, setConfirmDelivered] = useState(false);
@@ -120,7 +130,7 @@ export default function OrderPage() {
 
   const load = async () => {
     if (!orderId) return;
-    const [orderRes, linesRes, plansRes, labelsRes, issuedRes, deliveredRes, blockRes, fileRes] = await Promise.all([
+    const [orderRes, linesRes, plansRes, labelsRes, issuedRes, deliveredRes, blockRes, fileRes, lgRes] = await Promise.all([
       supabase.from('orders').select('*').eq('id', orderId).maybeSingle(),
       supabase.from('order_lines').select('*').eq('order_id', orderId),
       supabase
@@ -146,7 +156,9 @@ export default function OrderPage() {
         .in('action', ['desadv_generated', 'desadv_regenerated'])
         .order('created_at', { ascending: false })
         .limit(1),
+      supabase.rpc('order_lg_mismatches', { p_order_id: orderId }),
     ]);
+    setLgChanges(Array.isArray(lgRes.data) ? (lgRes.data as LgChange[]) : []);
     setOrder((orderRes.data as Order | null) ?? null);
     setLines((linesRes.data as OrderLine[]) ?? []);
     setPlans((plansRes.data as PlanRow[]) ?? []);
@@ -193,6 +205,7 @@ export default function OrderPage() {
   const hasPallets = plans.length > 0;
   const hasLabels = !!lastLabel;
   const locked = !!blockReason; // entregue, ou ficheiro já criado e não é administrador
+  const lgBlocked = lgChanges.length > 0; // LG mudou: etiquetas e ficheiro parados até confirmar
   const palletBoxes = plans.reduce((sum, p) => sum + (p.total_boxes ?? 0), 0);
   // Ficheiro feito = criado depois das últimas etiquetas (se refizerem paletes/etiquetas, volta a faltar).
   const fileDone = hasLabels && !!lastFileAt && lastFileAt >= (lastLabel?.generated_at ?? '');
@@ -291,6 +304,21 @@ export default function OrderPage() {
     }
   };
 
+  const confirmLgChanges = async () => {
+    setBusy('lg');
+    try {
+      const { error } = await supabase.rpc('confirm_order_lgs', { p_order_id: order.id });
+      if (error) throw new Error(error.message);
+      setConfirmLg(false);
+      await load();
+      toast({ title: 'Mudança de LG confirmada', description: 'Já pode emitir as etiquetas e criar o ficheiro.' });
+    } catch (error) {
+      fail('Não foi possível confirmar', error);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const markDelivered = async () => {
     setBusy('delivered');
     try {
@@ -379,6 +407,32 @@ export default function OrderPage() {
           </div>
         )}
 
+        {lgBlocked && (
+          <div className="rounded-xl border-2 border-red-400 bg-red-50 p-5 text-red-900" role="alert">
+            <h2 className="flex items-center gap-2 text-xl font-semibold">
+              <AlertTriangle className="h-6 w-6" /> Atenção: o LG mudou em {lgChanges.length} {lgChanges.length === 1 ? 'loja' : 'lojas'}
+            </h2>
+            <p className="mt-1">
+              Esta encomenda traz um LG diferente do habitual. Enquanto um administrador não confirmar,
+              não é possível emitir etiquetas nem criar o ficheiro.
+            </p>
+            <ul className="mt-3 space-y-1 text-lg">
+              {lgChanges.map((c) => (
+                <li key={`${c.store_code}-${c.order_lg}`}>
+                  Loja <strong>{c.store_code}</strong>: era <strong>{c.known_lgs}</strong>, agora vem <strong>{c.order_lg}</strong>
+                </li>
+              ))}
+            </ul>
+            {isAdmin ? (
+              <IndustrialButton className="mt-4" variant="destructive" onClick={() => setConfirmLg(true)} isLoading={busy === 'lg'}>
+                Confirmar que o LG novo está certo
+              </IndustrialButton>
+            ) : (
+              <p className="mt-3 font-medium">Avise um administrador para confirmar a mudança.</p>
+            )}
+          </div>
+        )}
+
         {/* Passo 1 */}
         <StepCard number={1} title="Fazer paletes" done={hasPallets} locked={false}>
           {hasPallets ? (
@@ -415,8 +469,10 @@ export default function OrderPage() {
         </StepCard>
 
         {/* Passo 2 */}
-        <StepCard number={2} title="Emitir etiquetas" done={hasLabels} locked={!hasPallets}>
-          {!hasPallets ? (
+        <StepCard number={2} title="Emitir etiquetas" done={hasLabels && !lgBlocked} locked={!hasPallets || lgBlocked}>
+          {lgBlocked ? (
+            <p className="text-muted-foreground">Parado: o LG de uma loja mudou. Veja o aviso a vermelho em cima.</p>
+          ) : !hasPallets ? (
             <p className="text-muted-foreground">Primeiro faça as paletes (passo 1).</p>
           ) : hasLabels ? (
             <>
@@ -447,8 +503,10 @@ export default function OrderPage() {
         </StepCard>
 
         {/* Passo 3 */}
-        <StepCard number={3} title="Criar ficheiro" done={fileDone} locked={!hasLabels}>
-          {!hasLabels ? (
+        <StepCard number={3} title="Criar ficheiro" done={fileDone && !lgBlocked} locked={!hasLabels || lgBlocked}>
+          {lgBlocked ? (
+            <p className="text-muted-foreground">Parado: o LG de uma loja mudou. Veja o aviso a vermelho em cima.</p>
+          ) : !hasLabels ? (
             <p className="text-muted-foreground">Primeiro emita as etiquetas (passo 2).</p>
           ) : fileDone ? (
             <>
@@ -553,6 +611,31 @@ export default function OrderPage() {
             <IndustrialButton variant="ghost" onClick={() => setFileDialog(false)}>Cancelar</IndustrialButton>
             <IndustrialButton onClick={() => void doFile()} isLoading={busy === 'file'} disabled={!guideOk || !dateOk} icon={<FileSpreadsheet className="h-4 w-4" />}>
               Criar ficheiro
+            </IndustrialButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={confirmLg} onOpenChange={(open) => busy === null && setConfirmLg(open)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirmar a mudança de LG?</DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>Confirme com o Pingo Doce (ou com a encomenda) que estes LG novos estão certos:</p>
+                <ul className="list-disc pl-5 text-foreground">
+                  {lgChanges.map((c) => (
+                    <li key={`${c.store_code}-${c.order_lg}`}>Loja {c.store_code}: {c.known_lgs} → {c.order_lg}</li>
+                  ))}
+                </ul>
+                <p>A partir de agora, o LG novo passa a ser o habitual destas lojas.</p>
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <IndustrialButton variant="ghost" onClick={() => setConfirmLg(false)}>Cancelar</IndustrialButton>
+            <IndustrialButton onClick={() => void confirmLgChanges()} isLoading={busy === 'lg'}>
+              Sim, o LG novo está certo
             </IndustrialButton>
           </DialogFooter>
         </DialogContent>

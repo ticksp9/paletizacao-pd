@@ -432,6 +432,31 @@ async function handleRequest(req: Request, held: HeldReservation): Promise<Respo
       );
     }
 
+    // Mudança de LG: se uma loja conhecida vier com um LG diferente, um administrador tem
+    // de confirmar na página da encomenda antes de emitir etiquetas ou criar o ficheiro.
+    const { data: lgChanges, error: lgChangesError } = await supabase
+      .rpc("order_lg_mismatches", { p_order_id: order_id });
+    if (lgChangesError) {
+      throw new Error(`Falha a verificar os LG da encomenda: ${lgChangesError.message}`);
+    }
+    if (Array.isArray(lgChanges) && lgChanges.length > 0) {
+      const list = lgChanges
+        .map((c: { store_code: string; known_lgs: string; order_lg: string }) =>
+          `loja ${c.store_code}: era ${c.known_lgs}, agora ${c.order_lg}`)
+        .join("; ");
+      return new Response(
+        JSON.stringify({
+          success: false,
+          code: "LG_CHANGED",
+          error: `O LG de ${lgChanges.length} loja(s) mudou (${list}). Um administrador tem de confirmar a mudança na página da encomenda.`,
+          lg_changes: lgChanges,
+        }),
+        { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+    const { error: learnError } = await supabase.rpc("learn_order_lgs", { p_order_id: order_id });
+    if (learnError) console.error("Falha a registar lojas novas:", learnError.message);
+
     const { data: reservationToken, error: reservationError } = await supabase
       .rpc("reserve_plan_issuance", { p_order_id: order_id });
     if (reservationError || !reservationToken) {

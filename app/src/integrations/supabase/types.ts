@@ -875,6 +875,11 @@ export type Database = {
     }
     Functions: {
       bootstrap_admin: { Args: never; Returns: boolean }
+      confirm_order_lgs: { Args: { p_order_id: string }; Returns: Json }
+      order_lg_mismatches: {
+        Args: { p_order_id: string }
+        Returns: { warehouse_code: string; store_code: string; order_lg: string; known_lgs: string }[]
+      }
       generate_soc_code: { Args: never; Returns: string }
       mark_order_delivered: {
         Args: { p_order_id: string; p_note?: string | null }
