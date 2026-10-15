@@ -875,6 +875,9 @@ export type Database = {
     }
     Functions: {
       bootstrap_admin: { Args: never; Returns: boolean }
+      clear_lg_locations: { Args: never; Returns: Json }
+      latest_lg_locations_backup: { Args: never; Returns: Json }
+      restore_lg_locations_backup: { Args: never; Returns: Json }
       confirm_order_lgs: { Args: { p_order_id: string }; Returns: Json }
       order_lg_mismatches: {
         Args: { p_order_id: string }

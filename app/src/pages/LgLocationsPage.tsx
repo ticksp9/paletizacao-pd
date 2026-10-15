@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
   Upload, MapPin, Search, RefreshCw, CheckCircle2, XCircle, AlertTriangle,
-  PlusCircle, Pencil, Copy, Ban, ArrowUpDown, RotateCcw,
+  PlusCircle, Pencil, Copy, Ban, ArrowUpDown, RotateCcw, Trash2, History,
 } from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { MainLayout } from '@/components/layout/MainLayout';
@@ -130,6 +130,57 @@ export default function LgLocationsPage() {
   const isAdmin = role === 'admin';
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  // ── Apagar todos os LG (para carregar o Excel novo do mês) e repor a cópia ──
+  const [showClear, setShowClear] = useState(false);
+  const [clearText, setClearText] = useState('');
+  const [showRestore, setShowRestore] = useState(false);
+  const [clearBusy, setClearBusy] = useState(false);
+  const { data: lastBackup, refetch: refetchBackup } = useQuery({
+    queryKey: ['pd_lg_locations_backup'],
+    enabled: role === 'admin',
+    queryFn: async () => {
+      const { data } = await supabase.rpc('latest_lg_locations_backup');
+      return (data ?? null) as { backup_id: string; backed_up_at: string; rows: number } | null;
+    },
+  });
+
+  const clearAllLocations = async () => {
+    setClearBusy(true);
+    try {
+      const { data, error } = await supabase.rpc('clear_lg_locations');
+      if (error) throw new Error(error.message);
+      const deleted = (data as { deleted?: number } | null)?.deleted ?? 0;
+      setShowClear(false);
+      setClearText('');
+      await queryClient.invalidateQueries({ queryKey: ['pd_lg_locations'] });
+      await refetchBackup();
+      toast({
+        title: `${deleted} LG apagados`,
+        description: 'Ficou guardada uma cópia. Agora carregue o Excel novo em «Importar master GJMLGS».',
+      });
+    } catch (err) {
+      toast({ title: 'Não foi possível apagar', description: (err as Error).message, variant: 'destructive' });
+    } finally {
+      setClearBusy(false);
+    }
+  };
+
+  const restoreLastBackup = async () => {
+    setClearBusy(true);
+    try {
+      const { data, error } = await supabase.rpc('restore_lg_locations_backup');
+      if (error) throw new Error(error.message);
+      const restored = (data as { restored?: number } | null)?.restored ?? 0;
+      setShowRestore(false);
+      await queryClient.invalidateQueries({ queryKey: ['pd_lg_locations'] });
+      toast({ title: `${restored} LG repostos`, description: 'A lista voltou a ficar como estava antes de apagar.' });
+    } catch (err) {
+      toast({ title: 'Não foi possível repor', description: (err as Error).message, variant: 'destructive' });
+    } finally {
+      setClearBusy(false);
+    }
+  };
 
   const debugMode = new URLSearchParams(location.search).get('debug') === '1';
 
@@ -937,6 +988,16 @@ export default function LgLocationsPage() {
                 Nova localização
               </IndustrialButton>
             )}
+            {isAdmin && locations.length > 0 && (
+              <IndustrialButton variant="destructive" size="sm" onClick={() => { setClearText(''); setShowClear(true); }} icon={<Trash2 className="w-4 h-4" />}>
+                Apagar todos os LG
+              </IndustrialButton>
+            )}
+            {isAdmin && lastBackup && (
+              <IndustrialButton variant="outline" size="sm" onClick={() => setShowRestore(true)} icon={<History className="w-4 h-4" />}>
+                Repor lista anterior
+              </IndustrialButton>
+            )}
           </div>
         </div>
 
@@ -1353,6 +1414,48 @@ export default function LgLocationsPage() {
               icon={<RotateCcw className="w-4 h-4" />}
             >
               Reativar todos ({inactiveLocations.length})
+            </IndustrialButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={showClear} onOpenChange={(open) => !clearBusy && setShowClear(open)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Apagar todos os LG?</DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>Vão ser apagados <strong>todos os {allRows.length} registos</strong> de LG / Lojas PD, de todos os armazéns.</p>
+                <p>Use isto quando o Pingo Doce mandar a lista nova do mês. Logo a seguir, carregue o Excel novo em
+                  <strong> «Importar master GJMLGS»</strong>. Enquanto a lista estiver vazia, as etiquetas saem sem o nome da loja.</p>
+                <p>Fica guardada uma cópia: se o Excel novo falhar, carregue em «Repor lista anterior».</p>
+                <p>Para confirmar, escreva <strong>APAGAR</strong>:</p>
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <Input value={clearText} onChange={(e) => setClearText(e.target.value)} placeholder="APAGAR" aria-label="Escreva APAGAR para confirmar" />
+          <DialogFooter>
+            <IndustrialButton variant="ghost" onClick={() => setShowClear(false)} disabled={clearBusy}>Cancelar</IndustrialButton>
+            <IndustrialButton variant="destructive" onClick={() => void clearAllLocations()} isLoading={clearBusy} disabled={clearText.trim().toUpperCase() !== 'APAGAR'} icon={<Trash2 className="w-4 h-4" />}>
+              Apagar todos
+            </IndustrialButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showRestore} onOpenChange={(open) => !clearBusy && setShowRestore(open)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Repor a lista anterior?</DialogTitle>
+            <DialogDescription>
+              {lastBackup
+                ? `Volta a lista guardada em ${new Date(lastBackup.backed_up_at).toLocaleString('pt-PT')} (${lastBackup.rows} registos). O que estiver agora na lista é substituído.`
+                : 'Não há nenhuma cópia guardada.'}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <IndustrialButton variant="ghost" onClick={() => setShowRestore(false)} disabled={clearBusy}>Cancelar</IndustrialButton>
+            <IndustrialButton onClick={() => void restoreLastBackup()} isLoading={clearBusy} disabled={!lastBackup} icon={<History className="w-4 h-4" />}>
+              Repor
             </IndustrialButton>
           </DialogFooter>
         </DialogContent>
