@@ -354,16 +354,24 @@ function drawLabel(
   hLine(y);
   y -= 3;
 
-  // ORDER BLOCK: OC numa linha e Entrega na linha de baixo (nomes de entrega longos,
-  // como "NÃO PERECÍVEIS ALGOZ(5701)", ficavam por cima do número da encomenda).
+  // ORDER BLOCK: OC à esquerda e Entrega à direita na mesma linha. Se não couberem as duas
+  // (nome de entrega grande), a Entrega passa para a linha de baixo, alinhada à direita, e
+  // encolhe se for preciso (pedido de 15/10).
   const ocText = `OC: ${label.order_ref}`;
   const entregaText = `Entrega: ${label.delivery_label}`;
   y -= 11;
   page.drawText(ocText, { x: MARGIN, y, size: 10, font: fontBold, color: rgb(0, 0, 0) });
-  y -= 12;
-  let entSize = 10;
-  while (entSize > 6 && fontBold.widthOfTextAtSize(entregaText, entSize) > usable) entSize -= 0.5;
-  page.drawText(entregaText, { x: MARGIN, y, size: entSize, font: fontBold, color: rgb(0, 0, 0) });
+  const ocW = fontBold.widthOfTextAtSize(ocText, 10);
+  const entW10 = fontBold.widthOfTextAtSize(entregaText, 10);
+  if (ocW + 8 + entW10 <= usable) {
+    page.drawText(entregaText, { x: W - MARGIN - entW10, y, size: 10, font: fontBold, color: rgb(0, 0, 0) });
+  } else {
+    y -= 12;
+    let entSize = 10;
+    while (entSize > 6 && fontBold.widthOfTextAtSize(entregaText, entSize) > usable) entSize -= 0.5;
+    const entW = fontBold.widthOfTextAtSize(entregaText, entSize);
+    page.drawText(entregaText, { x: W - MARGIN - entW, y, size: entSize, font: fontBold, color: rgb(0, 0, 0) });
+  }
 
   y -= 5;
   hLine(y);

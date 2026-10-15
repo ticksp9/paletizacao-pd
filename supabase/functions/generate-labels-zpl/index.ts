@@ -277,13 +277,19 @@ export function buildLabelZpl(label: LabelEntry): string {
 
   zpl += `^FO${M},195^GB${usable},0,2^FS\n`;
 
-  // ORDER BLOCK: OC numa linha e Entrega na linha de baixo (nomes longos sobrepunham-se).
+  // ORDER BLOCK: OC à esquerda e Entrega à direita na mesma linha; se o nome da entrega for
+  // grande, a Entrega passa para a linha de baixo, alinhada à direita (pedido de 15/10).
+  const ocText = `OC: ${label.order_ref}`;
   const entregaText = `Entrega: ${label.delivery_label}`;
-  const entregaFont = entregaText.length > 34 ? 20 : 24;
+  const oneLine = ocText.length + entregaText.length + 3 <= 48; // ~48 caracteres cabem a 26 pontos
   zpl += `^CF0,26\n`;
-  zpl += `^FO${M},203^FDOC: ${sn(label.order_ref)}^FS\n`;
-  zpl += `^CF0,${entregaFont}\n`;
-  zpl += `^FO${M},235^FB${usable},1,0,L^FD${sn(entregaText)}^FS\n`;
+  zpl += `^FO${M},203^FD${sn(ocText)}^FS\n`;
+  if (oneLine) {
+    zpl += `^FO${M},203^FB${usable},1,0,R^FD${sn(entregaText)}^FS\n`;
+  } else {
+    zpl += `^CF0,${entregaText.length > 50 ? 20 : 24}\n`;
+    zpl += `^FO${M},235^FB${usable},1,0,R^FD${sn(entregaText)}^FS\n`;
+  }
 
   zpl += `^FO${M},264^GB${usable},0,2^FS\n`;
 
