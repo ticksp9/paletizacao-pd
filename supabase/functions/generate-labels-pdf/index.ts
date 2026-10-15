@@ -354,13 +354,16 @@ function drawLabel(
   hLine(y);
   y -= 3;
 
-  // ORDER BLOCK
+  // ORDER BLOCK: OC numa linha e Entrega na linha de baixo (nomes de entrega longos,
+  // como "NÃO PERECÍVEIS ALGOZ(5701)", ficavam por cima do número da encomenda).
   const ocText = `OC: ${label.order_ref}`;
   const entregaText = `Entrega: ${label.delivery_label}`;
   y -= 11;
   page.drawText(ocText, { x: MARGIN, y, size: 10, font: fontBold, color: rgb(0, 0, 0) });
-  const entW = fontBold.widthOfTextAtSize(entregaText, 10);
-  page.drawText(entregaText, { x: W - MARGIN - entW, y, size: 10, font: fontBold, color: rgb(0, 0, 0) });
+  y -= 12;
+  let entSize = 10;
+  while (entSize > 6 && fontBold.widthOfTextAtSize(entregaText, entSize) > usable) entSize -= 0.5;
+  page.drawText(entregaText, { x: MARGIN, y, size: entSize, font: fontBold, color: rgb(0, 0, 0) });
 
   y -= 5;
   hLine(y);

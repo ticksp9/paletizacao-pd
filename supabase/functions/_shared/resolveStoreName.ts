@@ -16,20 +16,27 @@ export function cleanStoreName(raw: string): string {
   return cleaned;
 }
 
+// Linha 1 da etiqueta: "PD " + nome, sem o número da loja no fim ("PD-FARO 1" → "PD FARO").
+// O número da loja já aparece em "LOJA: 827".
 export function formatStoreLabelName(name: string, storeCode: string): string {
   const storeName = name
+    .replace(/\s+/g, " ")
     .trim()
     .replace(/^(?:PD\s*[-–]?\s*)+/i, "")
+    .replace(/\s+\d+$/, "")
     .trim() || `LOJA ${storeCode}`;
   return `PD ${storeName}`.toUpperCase();
 }
 
+// Linha 2 da etiqueta: a localidade. Usa a cidade dos dados mestre; se não houver (o Excel
+// do Pingo Doce não a traz), usa a parte do nome antes de " - " ("PD BRAGA - HIPER" → "BRAGA";
+// "PD FARO" → "FARO"). Pedido de 15/10: "PD Faro e por baixo só Faro".
 export function formatStoreLabelCity(city: string, line1: string): string {
-  const storeCity = city.trim();
-  const storeName = line1.replace(/^PD\s+/i, "").trim();
-  return storeCity && storeCity.toUpperCase() !== storeName.toUpperCase()
-    ? storeCity
-    : "";
+  const storeCity = city.replace(/\s+/g, " ").trim();
+  if (storeCity) return storeCity.toUpperCase();
+  const base = line1.replace(/^PD\s+/i, "").trim();
+  if (!base || /^LOJA\s+\d+$/i.test(base)) return "";
+  return base.split(/\s+[-–]\s+/)[0].replace(/\s+\d+$/, "").trim().toUpperCase();
 }
 
 export function extractNames(data: Record<string, unknown>): { store_name: string; store_city: string } {

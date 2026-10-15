@@ -277,24 +277,27 @@ export function buildLabelZpl(label: LabelEntry): string {
 
   zpl += `^FO${M},195^GB${usable},0,2^FS\n`;
 
-  // ORDER BLOCK
+  // ORDER BLOCK: OC numa linha e Entrega na linha de baixo (nomes longos sobrepunham-se).
+  const entregaText = `Entrega: ${label.delivery_label}`;
+  const entregaFont = entregaText.length > 34 ? 20 : 24;
   zpl += `^CF0,26\n`;
-  zpl += `^FO${M},195^FDOC: ${sn(label.order_ref)}^FS\n`;
-  zpl += `^FO${M},195^FB${usable},1,0,R^FDEntrega: ${sn(label.delivery_label)}^FS\n`;
+  zpl += `^FO${M},203^FDOC: ${sn(label.order_ref)}^FS\n`;
+  zpl += `^CF0,${entregaFont}\n`;
+  zpl += `^FO${M},235^FB${usable},1,0,L^FD${sn(entregaText)}^FS\n`;
 
-  zpl += `^FO${M},228^GB${usable},0,2^FS\n`;
+  zpl += `^FO${M},264^GB${usable},0,2^FS\n`;
 
   // VOLUME (above barcode with clear gap)
   zpl += `^CF0,30\n`;
-  zpl += `^FO${M},245^FDVolume ${label.volume_no} de ${label.volume_total}^FS\n`;
+  zpl += `^FO${M},280^FDVolume ${label.volume_no} de ${label.volume_total}^FS\n`;
   if (typeof label.box_count === "number") {
-    zpl += `^FO${M},245^FB${usable},1,0,R^FD${label.box_count} caixas^FS\n`;
+    zpl += `^FO${M},280^FB${usable},1,0,R^FD${label.box_count} caixas^FS\n`;
   }
-  zpl += `^FO${M},252^A0N,14,14^FB${usable},1,0,R^FDPalete ${label.pallet_number}/${label.pallet_total}^FS\n`;
+  zpl += `^FO${M},${H - M - 14}^A0N,14,14^FB${usable},1,0,R^FDPalete ${label.pallet_number}/${label.pallet_total}^FS\n`;
 
   // Barcode (starts well below Volume text)
   const barcodeX = Math.round((W - 300) / 2);
-  zpl += `^FO${barcodeX},290\n`;
+  zpl += `^FO${barcodeX},325\n`;
   zpl += `^BY2\n`;
   zpl += `^BCN,90,Y,N,N\n`;
   zpl += `^FD${label.soc_code}^FS\n`;
